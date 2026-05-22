@@ -1,0 +1,60 @@
+export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+async function request(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options
+  });
+  if (!response.ok) {
+    throw new Error(`${options.method || "GET"} ${path} failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export function getHealth() {
+  return request("/api/health");
+}
+
+export function startSession(payload) {
+  return request("/api/session/start", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getLatestPacket(source = "auto") {
+  return request(`/api/live/latest?source=${encodeURIComponent(source)}`);
+}
+
+export function getLiveSource() {
+  return request("/api/live/source");
+}
+
+export function getVisionFrameUrl(tick = Date.now()) {
+  return `${API_BASE}/api/vision/frame?t=${tick}`;
+}
+
+export function postPacket(packet) {
+  return request("/api/packets", {
+    method: "POST",
+    body: JSON.stringify(packet)
+  });
+}
+
+export function getCoachCue(packet) {
+  return request("/api/coach/cue", {
+    method: "POST",
+    body: JSON.stringify(packet)
+  });
+}
+
+export function endSession(payload) {
+  return request("/api/session/end", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getSessions() {
+  return request("/api/sessions");
+}

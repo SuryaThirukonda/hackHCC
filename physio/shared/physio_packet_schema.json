@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhysioPacket",
+  "type": "object",
+  "required": [
+    "session_id",
+    "timestamp_ms",
+    "exercise",
+    "side",
+    "device_id",
+    "sensor_status",
+    "camera_status",
+    "distance_cm",
+    "sensor_jitter_score",
+    "opencv_jitter_score",
+    "combined_jitter_score",
+    "jitter_detected",
+    "shoulder_angle",
+    "elbow_angle",
+    "target_angle",
+    "landmark_confidence",
+    "rep_count",
+    "rep_phase",
+    "hold_time_sec",
+    "pace",
+    "range_status",
+    "compensation",
+    "physio_score",
+    "coach_state",
+    "local_coach_message",
+    "ai_coach_message",
+    "avatar_status",
+    "voice_status"
+  ],
+  "properties": {
+    "session_id": { "type": "string" },
+    "timestamp_ms": { "type": "integer" },
+    "exercise": { "type": "string", "const": "right_arm_raise" },
+    "side": { "type": "string", "enum": ["right", "left"] },
+    "device_id": { "type": "string" },
+    "sensor_status": { "type": "string", "enum": ["ok", "warning", "error", "offline"] },
+    "camera_status": { "type": "string", "enum": ["ok", "warning", "error"] },
+    "distance_cm": { "type": ["number", "null"] },
+    "sensor_jitter_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "opencv_jitter_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "combined_jitter_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "jitter_detected": { "type": "boolean" },
+    "shoulder_angle": { "type": "number" },
+    "elbow_angle": { "type": "number" },
+    "target_angle": { "type": "number" },
+    "landmark_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "rep_count": { "type": "integer", "minimum": 0 },
+    "rep_phase": {
+      "type": "string",
+      "enum": ["idle", "resting", "raising", "holding", "lowering", "rep_complete"]
+    },
+    "hold_time_sec": { "type": "number", "minimum": 0 },
+    "pace": { "type": "string", "enum": ["too_slow", "good", "too_fast", "unknown"] },
+    "range_status": {
+      "type": "string",
+      "enum": ["below_start", "too_low", "almost_there", "target_met", "overextended", "unknown"]
+    },
+    "compensation": {
+      "type": "string",
+      "enum": ["none", "shoulder_shrug", "torso_lean", "low_confidence", "unknown"]
+    },
+    "physio_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "coach_state": {
+      "type": "string",
+      "enum": [
+        "good_form",
+        "almost_there",
+        "too_fast",
+        "too_jittery",
+        "hold_longer",
+        "low_confidence",
+        "rest_needed",
+        "session_complete",
+        "error"
+      ]
+    },
+    "local_coach_message": { "type": "string" },
+    "ai_coach_message": { "type": ["string", "null"] },
+    "avatar_status": { "type": "string" },
+    "voice_status": { "type": "string" }
+  }
+}
