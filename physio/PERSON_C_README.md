@@ -13,7 +13,15 @@ AVATAR_PROVIDER=mock
 STORAGE_PROVIDER=local
 ```
 
-Mock providers never call external services. Real providers are enabled only with environment variables and all failures fall back to mock/local behavior.
+Mock providers never call external services. Real providers are enabled only with environment variables or `physio/.env`, and all failures fall back to mock/local behavior.
+
+For local testing, copy the example file once:
+
+```bash
+cp physio/.env.example physio/.env
+```
+
+Then edit only `physio/.env`. It is ignored by git, so API keys stay local.
 
 ## Backend Endpoints
 
@@ -30,6 +38,14 @@ curl -X POST http://localhost:8000/api/coach/cue \
   -H "Content-Type: application/json" \
   --data-binary @test_packets/good_form.json
 ```
+
+Provider status test:
+
+```bash
+curl http://localhost:8000/api/coach/provider-status
+```
+
+This reports whether keys are configured without returning the actual secret values.
 
 Live WebSocket:
 
@@ -87,9 +103,27 @@ HeyGen avatar:
 AVATAR_PROVIDER=heygen
 HEYGEN_API_KEY=...
 HEYGEN_AVATAR_ID=...
+HEYGEN_VOICE_ID=...
 ```
 
 The HeyGen call is non-blocking from the app's point of view. If HeyGen returns a video ID or URL, it is included in the cue response.
+
+To make HeyGen lip-sync the ElevenLabs audio instead of using HeyGen text-to-speech:
+
+```text
+HEYGEN_USE_ELEVENLABS_AUDIO=true
+PUBLIC_BASE_URL=https://your-public-tunnel.example
+```
+
+`PUBLIC_BASE_URL` must point to the running backend through a public HTTPS URL, such as an ngrok/cloudflared tunnel. HeyGen cannot fetch `http://localhost:8000/static/audio/...` from your laptop. Without `PUBLIC_BASE_URL`, HeyGen automatically uses text mode.
+
+Full pipeline test packet:
+
+```bash
+curl -X POST http://localhost:8000/api/coach/cue \
+  -H "Content-Type: application/json" \
+  --data-binary @test_packets/gemini_pipeline.json
+```
 
 SQLite summaries:
 

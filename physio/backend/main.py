@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from coach.coach_orchestrator import CoachOrchestrator
+from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
 from schemas import (
@@ -25,6 +26,7 @@ from schemas import (
 from storage_provider import get_session_store
 
 
+load_env_file()
 app = FastAPI(title="Physio Backend", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -129,6 +131,22 @@ async def broadcast_packet(packet: PhysioPacket) -> None:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "physio-backend"}
+
+
+@app.get("/api/coach/provider-status")
+def coach_provider_status() -> dict[str, Any]:
+    return {
+        "providers": coach_orchestrator.provider_status(),
+        "env": {
+            "gemini_key_configured": configured_secret("GEMINI_API_KEY"),
+            "elevenlabs_key_configured": configured_secret("ELEVENLABS_API_KEY"),
+            "elevenlabs_voice_configured": configured_secret("ELEVENLABS_VOICE_ID"),
+            "heygen_key_configured": configured_secret("HEYGEN_API_KEY"),
+            "heygen_avatar_configured": configured_secret("HEYGEN_AVATAR_ID"),
+            "heygen_voice_configured": configured_secret("HEYGEN_VOICE_ID"),
+            "public_base_url_configured": public_base_url() is not None,
+        },
+    }
 
 
 @app.post("/api/session/start", response_model=SessionStartResponse)

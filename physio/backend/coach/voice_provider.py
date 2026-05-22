@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-import uuid
+import json
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,13 +39,14 @@ class ElevenLabsVoiceProvider:
             return result
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
-        body = (
-            "{"
-            f"\"text\":{_json_string(text)},"
-            f"\"model_id\":{_json_string(self.model_id)},"
-            "\"voice_settings\":{\"stability\":0.55,\"similarity_boost\":0.75}"
-            "}"
-        ).encode("utf-8")
+        body = json.dumps({
+            "text": text,
+            "model_id": self.model_id,
+            "voice_settings": {
+                "stability": float(os.getenv("ELEVENLABS_STABILITY", "0.55")),
+                "similarity_boost": float(os.getenv("ELEVENLABS_SIMILARITY_BOOST", "0.75")),
+            },
+        }).encode("utf-8")
         request = urllib.request.Request(
             url,
             data=body,
@@ -85,9 +87,3 @@ def _env_secret(name: str) -> str | None:
     if not value or value.startswith("your_"):
         return None
     return value
-
-
-def _json_string(value: str) -> str:
-    import json
-
-    return json.dumps(value)

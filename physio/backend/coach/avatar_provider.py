@@ -16,7 +16,12 @@ class AvatarResult:
 
 
 class MockAvatarProvider:
-    def speak(self, text: str, optional_audio_path: str | None = None) -> AvatarResult:
+    def speak(
+        self,
+        text: str,
+        optional_audio_path: str | None = None,
+        optional_audio_url: str | None = None,
+    ) -> AvatarResult:
         return AvatarResult(status="mock")
 
 
@@ -27,17 +32,21 @@ class HeyGenAvatarProvider:
         self.voice_id = _env_secret("HEYGEN_VOICE_ID")
         self.timeout_sec = float(os.getenv("HEYGEN_TIMEOUT_SEC", "4"))
         self.api_url = os.getenv("HEYGEN_API_URL", "https://api.heygen.com/v2/video/generate")
+        self.use_audio_source = os.getenv("HEYGEN_USE_ELEVENLABS_AUDIO", "false").lower() in {"1", "true", "yes"}
         self.fallback = MockAvatarProvider()
 
-    def speak(self, text: str, optional_audio_path: str | None = None) -> AvatarResult:
+    def speak(
+        self,
+        text: str,
+        optional_audio_path: str | None = None,
+        optional_audio_url: str | None = None,
+    ) -> AvatarResult:
         if not self.api_key or not self.avatar_id:
-            result = self.fallback.speak(text, optional_audio_path)
+            result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
             result.status = "mock_missing_heygen_key"
             return result
 
-        voice: dict[str, str] = {"type": "text", "input_text": text}
-        if self.voice_id:
-            voice["voice_id"] = self.voice_id
+        voice = self._voice_payload(text, optional_audio_url)
 
         body = json.dumps({
             "video_inputs": [{
@@ -69,10 +78,22 @@ class HeyGenAvatarProvider:
                 avatar_url=data.get("video_url") or data.get("share_url"),
             )
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            result = self.fallback.speak(text, optional_audio_path)
+            result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
             result.status = "mock_heygen_error"
             result.error_message = str(exc)
             return result
+
+    def _voice_payload(self, text: str, optional_audio_url: str | None) -> dict[str, str]:
+        if self.use_audio_source and optional_audio_url:
+            return {
+                "type": "audio",
+                "audio_url": optional_audio_url,
+            }
+
+        voice: dict[str, str] = {"type": "text", "input_text": text}
+        if self.voice_id:
+            voice["voice_id"] = self.voice_id
+        return voice
 
 
 def get_avatar_provider() -> MockAvatarProvider | HeyGenAvatarProvider:

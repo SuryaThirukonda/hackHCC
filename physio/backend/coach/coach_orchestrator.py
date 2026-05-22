@@ -45,7 +45,11 @@ class CoachOrchestrator:
         avatar_result = AvatarResult(status="idle")
         if should_speak:
             voice_result = self.voice_provider.synthesize(message)
-            avatar_result = self.avatar_provider.speak(message, voice_result.local_file_path)
+            avatar_result = self.avatar_provider.speak(
+                message,
+                voice_result.local_file_path,
+                self._public_audio_url(voice_result.audio_url),
+            )
             memory.last_spoken_ms = now_ms
             memory.last_spoken_message = message
 
@@ -86,6 +90,17 @@ class CoachOrchestrator:
     def reset_session(self, session_id: str) -> None:
         self.memories.pop(session_id, None)
 
+    def provider_status(self) -> dict[str, str | int | bool | None]:
+        return {
+            "coach_provider": self.coach_provider.__class__.__name__,
+            "voice_provider": self.voice_provider.__class__.__name__,
+            "avatar_provider": self.avatar_provider.__class__.__name__,
+            "min_speak_gap_ms": self.min_speak_gap_ms,
+            "duplicate_gap_ms": self.duplicate_gap_ms,
+            "heygen_use_elevenlabs_audio": os.getenv("HEYGEN_USE_ELEVENLABS_AUDIO", "false").lower() in {"1", "true", "yes"},
+            "public_base_url": bool(self._public_base()),
+        }
+
     def _should_speak(
         self,
         packet: PhysioPacket,
@@ -116,3 +131,18 @@ class CoachOrchestrator:
         if provider == "gemini":
             return GeminiCoachProvider()
         return MockCoachProvider()
+
+    @staticmethod
+    def _public_base() -> str | None:
+        value = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        return value or None
+
+    def _public_audio_url(self, audio_url: str | None) -> str | None:
+        if not audio_url:
+            return None
+        if audio_url.startswith("http://") or audio_url.startswith("https://"):
+            return audio_url
+        base = self._public_base()
+        if not base:
+            return None
+        return f"{base}{audio_url}"
