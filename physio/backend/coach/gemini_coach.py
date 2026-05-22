@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 from coach.base import CoachCue, CoachProvider, clean_coach_text, packet_metrics_for_ai
+from coach.http_errors import env_secret, provider_http_error
 from coach.mock_coach import MockCoachProvider
 from schemas import PhysioPacket, SessionSummary
 
@@ -13,7 +15,7 @@ class GeminiCoachProvider(CoachProvider):
     """Gemini adapter with a local fallback when keys or network are unavailable."""
 
     def __init__(self) -> None:
-        self.api_key = self._env_secret("GEMINI_API_KEY")
+        self.api_key = env_secret("GEMINI_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self.timeout_sec = float(os.getenv("GEMINI_TIMEOUT_SEC", "3"))
         self.fallback = MockCoachProvider()
@@ -76,8 +78,11 @@ class GeminiCoachProvider(CoachProvider):
             method="POST",
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ValueError(provider_http_error(exc, "gemini")) from exc
 
         try:
             return payload["candidates"][0]["content"]["parts"][0]["text"]
@@ -112,10 +117,3 @@ class GeminiCoachProvider(CoachProvider):
             "fatigue_level": fallback.fatigue_level,
             "coach_state_counts": json.dumps(states, sort_keys=True),
         }
-
-    @staticmethod
-    def _env_secret(name: str) -> str | None:
-        value = os.getenv(name, "").strip()
-        if not value or value.startswith("your_"):
-            return None
-        return value

@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from coach.http_errors import env_secret, provider_http_error
+
 
 @dataclass
 class AvatarResult:
@@ -27,9 +29,9 @@ class MockAvatarProvider:
 
 class HeyGenAvatarProvider:
     def __init__(self) -> None:
-        self.api_key = _env_secret("HEYGEN_API_KEY")
-        self.avatar_id = _env_secret("HEYGEN_AVATAR_ID")
-        self.voice_id = _env_secret("HEYGEN_VOICE_ID")
+        self.api_key = env_secret("HEYGEN_API_KEY")
+        self.avatar_id = env_secret("HEYGEN_AVATAR_ID")
+        self.voice_id = env_secret("HEYGEN_VOICE_ID")
         self.timeout_sec = float(os.getenv("HEYGEN_TIMEOUT_SEC", "4"))
         self.api_url = os.getenv("HEYGEN_API_URL", "https://api.heygen.com/v2/video/generate")
         self.use_audio_source = os.getenv("HEYGEN_USE_ELEVENLABS_AUDIO", "false").lower() in {"1", "true", "yes"}
@@ -44,6 +46,11 @@ class HeyGenAvatarProvider:
         if not self.api_key or not self.avatar_id:
             result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
             result.status = "mock_missing_heygen_key"
+            return result
+        if not self.use_audio_source and not self.voice_id:
+            result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
+            result.status = "mock_missing_heygen_voice_id"
+            result.error_message = "Set HEYGEN_VOICE_ID or enable HEYGEN_USE_ELEVENLABS_AUDIO with PUBLIC_BASE_URL."
             return result
 
         voice = self._voice_payload(text, optional_audio_url)
@@ -77,6 +84,11 @@ class HeyGenAvatarProvider:
                 avatar_session_id=data.get("video_id"),
                 avatar_url=data.get("video_url") or data.get("share_url"),
             )
+        except urllib.error.HTTPError as exc:
+            result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
+            result.status = "mock_heygen_error"
+            result.error_message = provider_http_error(exc, "heygen")
+            return result
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             result = self.fallback.speak(text, optional_audio_path, optional_audio_url)
             result.status = "mock_heygen_error"
@@ -101,10 +113,3 @@ def get_avatar_provider() -> MockAvatarProvider | HeyGenAvatarProvider:
     if provider == "heygen":
         return HeyGenAvatarProvider()
     return MockAvatarProvider()
-
-
-def _env_secret(name: str) -> str | None:
-    value = os.getenv(name, "").strip()
-    if not value or value.startswith("your_"):
-        return None
-    return value

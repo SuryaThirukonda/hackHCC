@@ -58,7 +58,7 @@ class CoachOrchestrator:
         memory.last_rep_count = packet.rep_count
         memory.recent_messages = (memory.recent_messages + [message])[-8:]
 
-        provider_error = cue.error_message or voice_result.error_message or avatar_result.error_message
+        provider_error = self._provider_errors(cue.error_message, voice_result.error_message, avatar_result.error_message)
         if provider_error and reason == "speak":
             reason = "speak_with_provider_fallback"
 
@@ -146,3 +146,8 @@ class CoachOrchestrator:
         if not base:
             return None
         return f"{base}{audio_url}"
+
+    @staticmethod
+    def _provider_errors(*errors: str | None) -> str | None:
+        present = [error for error in errors if error]
+        return " | ".join(present) if present else None

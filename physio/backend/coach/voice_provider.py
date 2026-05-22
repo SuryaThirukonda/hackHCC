@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from coach.http_errors import env_secret, provider_http_error
+
 
 @dataclass
 class VoiceResult:
@@ -24,8 +26,8 @@ class MockVoiceProvider:
 
 class ElevenLabsVoiceProvider:
     def __init__(self, audio_dir: Path | None = None) -> None:
-        self.api_key = _env_secret("ELEVENLABS_API_KEY")
-        self.voice_id = _env_secret("ELEVENLABS_VOICE_ID")
+        self.api_key = env_secret("ELEVENLABS_API_KEY")
+        self.voice_id = env_secret("ELEVENLABS_VOICE_ID")
         self.model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
         self.timeout_sec = float(os.getenv("ELEVENLABS_TIMEOUT_SEC", "4"))
         self.audio_dir = audio_dir or Path(__file__).resolve().parents[1] / "data" / "audio"
@@ -68,6 +70,11 @@ class ElevenLabsVoiceProvider:
                 audio_url=f"/static/audio/{filename}",
                 local_file_path=str(path),
             )
+        except urllib.error.HTTPError as exc:
+            result = self.fallback.synthesize(text)
+            result.status = "mock_elevenlabs_error"
+            result.error_message = provider_http_error(exc, "elevenlabs")
+            return result
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             result = self.fallback.synthesize(text)
             result.status = "mock_elevenlabs_error"
@@ -81,9 +88,3 @@ def get_voice_provider() -> MockVoiceProvider | ElevenLabsVoiceProvider:
         return ElevenLabsVoiceProvider()
     return MockVoiceProvider()
 
-
-def _env_secret(name: str) -> str | None:
-    value = os.getenv(name, "").strip()
-    if not value or value.startswith("your_"):
-        return None
-    return value

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 
-def load_env_file(path: Path | None = None) -> None:
+def load_env_file(path: Path | None = None, override: bool = True) -> None:
     env_path = path or Path(__file__).resolve().parents[1] / ".env"
     if not env_path.exists():
         return
@@ -16,13 +16,14 @@ def load_env_file(path: Path | None = None) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and (override or key not in os.environ):
             os.environ[key] = value
 
 
 def configured_secret(name: str) -> bool:
     value = os.getenv(name, "").strip()
-    return bool(value and not value.startswith("your_"))
+    lowered = value.lower()
+    return bool(value and not lowered.startswith("your_") and not lowered.startswith("paste_"))
 
 
 def public_base_url() -> str | None:
