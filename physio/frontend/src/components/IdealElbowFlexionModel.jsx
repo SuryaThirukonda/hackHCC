@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import * as THREE from "three";
 
 const LOOP_SECONDS = 6;
 
@@ -10,7 +9,7 @@ function phaseForTime(t) {
   return { angle: (1 - ((t - 4) / 2)) * 108, label: "Straighten" };
 }
 
-function makeLimb(length, radius, color) {
+function makeLimb(THREE, length, radius, color) {
   const geometry = new THREE.CylinderGeometry(radius, radius, length, 24);
   const material = new THREE.MeshStandardMaterial({ color, roughness: 0.72, metalness: 0.04 });
   const mesh = new THREE.Mesh(geometry, material);
@@ -19,7 +18,7 @@ function makeLimb(length, radius, color) {
   return mesh;
 }
 
-function makeJoint(radius, color) {
+function makeJoint(THREE, radius, color) {
   return new THREE.Mesh(
     new THREE.SphereGeometry(radius, 32, 16),
     new THREE.MeshStandardMaterial({ color, roughness: 0.66 })
@@ -33,8 +32,13 @@ export default function IdealElbowFlexionModel({ compact = false }) {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
+    let cleanup = () => {};
+    let cancelled = false;
 
-    const scene = new THREE.Scene();
+    import("three").then((THREE) => {
+      if (cancelled || !containerRef.current) return;
+
+      const scene = new THREE.Scene();
     scene.background = null;
 
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
@@ -55,13 +59,13 @@ export default function IdealElbowFlexionModel({ compact = false }) {
 
     const upperLength = compact ? 2.0 : 2.35;
     const forearmLength = compact ? 1.85 : 2.25;
-    const upperArm = makeLimb(upperLength, 0.11, 0x1a1917);
-    const shoulder = makeJoint(0.23, 0x1a1917);
+    const upperArm = makeLimb(THREE, upperLength, 0.11, 0x1a1917);
+    const shoulder = makeJoint(THREE, 0.23, 0x1a1917);
     const elbowGroup = new THREE.Group();
     elbowGroup.position.x = upperLength;
-    const elbow = makeJoint(0.21, 0x5a5752);
-    const forearm = makeLimb(forearmLength, 0.1, 0x1a1917);
-    const wrist = makeJoint(0.18, 0xc0392b);
+    const elbow = makeJoint(THREE, 0.21, 0x5a5752);
+    const forearm = makeLimb(THREE, forearmLength, 0.1, 0x1a1917);
+    const wrist = makeJoint(THREE, 0.18, 0xc0392b);
     wrist.position.x = forearmLength;
 
     root.add(shoulder, upperArm, elbowGroup);
@@ -107,7 +111,7 @@ export default function IdealElbowFlexionModel({ compact = false }) {
     const observer = new ResizeObserver(resize);
     observer.observe(container);
 
-    return () => {
+      cleanup = () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
       renderer.dispose();
@@ -115,7 +119,15 @@ export default function IdealElbowFlexionModel({ compact = false }) {
         if (item.geometry) item.geometry.dispose();
         if (item.material) item.material.dispose();
       });
-      container.removeChild(renderer.domElement);
+        if (renderer.domElement.parentNode === container) {
+          container.removeChild(renderer.domElement);
+        }
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      cleanup();
     };
   }, [compact]);
 

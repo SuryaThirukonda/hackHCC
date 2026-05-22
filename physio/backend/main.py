@@ -23,7 +23,7 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
-from session_store import LocalSessionStore
+from sqlite_store import SQLitePhysioStore
 
 
 app = FastAPI(title="Physio Backend", version="0.1.0")
@@ -61,7 +61,7 @@ class SessionState:
 
 state = SessionState()
 mock_generator = MockPacketGenerator()
-store = LocalSessionStore()
+store = SQLitePhysioStore()
 websockets: set[WebSocket] = set()
 
 
@@ -125,6 +125,7 @@ def latest_packet_for_source(source: str) -> PhysioPacket:
     state.latest_received_at = time.time()
     state.mock_received_at = state.latest_received_at
     state.packets.append(packet)
+    store.save_packet(packet)
     if len(state.packets) > 1200:
         state.packets = state.packets[-800:]
     return packet
@@ -168,6 +169,14 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.latest_frame = None
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
+    store.save_session_start(
+        session_id=session_id,
+        user_id=state.user_id,
+        exercise=state.exercise,
+        side=state.side,
+        target_angle=state.target_angle,
+        started_at_ms=state.started_at_ms,
+    )
     return SessionStartResponse(session_id=session_id, status="started")
 
 
@@ -192,6 +201,7 @@ async def ingest_packet(packet: PhysioPacket) -> dict[str, int | str]:
         if not source_recent("python") and not source_recent("browser"):
             state.active_source = "mock"
     state.packets.append(normalized)
+    store.save_packet(normalized)
     await broadcast_packet(normalized)
     return {"status": "accepted", "packet_count": len(state.packets)}
 
@@ -319,6 +329,11 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
 @app.get("/api/sessions", response_model=list[SessionSummary])
 def list_sessions() -> list[SessionSummary]:
     return store.list_summaries()
+
+
+@app.get("/api/storage/status")
+def storage_status() -> dict[str, Any]:
+    return store.counts()
 
 
 @app.websocket("/ws/live")

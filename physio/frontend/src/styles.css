@@ -376,6 +376,79 @@ button:disabled {
   overflow: hidden;
 }
 
+.ideal-model {
+  position: relative;
+  min-height: 390px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 50% 44%, rgba(0, 0, 0, 0.04), transparent 28%),
+    radial-gradient(circle, rgba(0, 0, 0, 0.06) 0 1px, transparent 1.2px),
+    var(--color-surface-2);
+  background-size: auto, 10px 10px, auto;
+}
+
+.ideal-model-compact {
+  min-height: 260px;
+}
+
+.ideal-model-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.ideal-model-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ideal-model-label {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  padding: 9px 13px;
+  text-transform: uppercase;
+}
+
+.ideal-model-steps {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.ideal-model-steps span {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: rgba(245, 242, 234, 0.76);
+  color: var(--color-step-badge-text);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  padding: 8px 10px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.clinical-note {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-2);
+  padding: 18px;
+}
+
 .movement-preview-art {
   position: relative;
   min-height: 360px;
