@@ -300,8 +300,8 @@ button:disabled {
 
 .preview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
-  gap: 16px;
+  grid-template-columns: minmax(360px, 0.84fr) minmax(520px, 1.16fr);
+  gap: 18px;
 }
 
 .preview-main,
@@ -371,19 +371,221 @@ button:disabled {
 
 .movement-preview {
   display: grid;
-  align-content: space-between;
-  gap: 18px;
+  grid-template-rows: minmax(500px, 1fr) auto;
+  align-content: stretch;
+  gap: 14px;
   overflow: hidden;
 }
 
-.ideal-model {
+.movement-diagram {
   position: relative;
-  min-height: 390px;
+  min-height: clamp(520px, 48vw, 700px);
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background:
-    radial-gradient(circle at 50% 44%, rgba(0, 0, 0, 0.04), transparent 28%),
+    radial-gradient(circle at 52% 48%, rgba(47, 143, 157, 0.08), transparent 30%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(245, 242, 234, 0.5)),
+    var(--color-surface-2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36);
+}
+
+.movement-diagram-svg {
+  display: block;
+  width: 100%;
+  height: clamp(520px, 48vw, 700px);
+}
+
+.diagram-board {
+  fill: rgba(245, 242, 234, 0.76);
+  stroke: var(--color-border);
+}
+
+.diagram-grid line {
+  stroke: rgba(26, 25, 23, 0.07);
+  stroke-width: 1;
+}
+
+.diagram-torso rect,
+.diagram-torso path,
+.diagram-torso circle {
+  fill: #dfe8e4;
+  stroke: rgba(26, 25, 23, 0.14);
+  stroke-width: 2;
+}
+
+.diagram-label,
+.diagram-reference-labels text,
+.diagram-torso text,
+.diagram-ghost-start text,
+.diagram-motion-label,
+.diagram-callouts text,
+.diagram-elbow text {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.diagram-upper-arm rect,
+.diagram-forearm > g > rect:first-child {
+  fill: #23313a;
+  stroke: rgba(255, 255, 255, 0.26);
+  stroke-width: 2;
+}
+
+.diagram-label-start {
+  text-anchor: middle;
+}
+
+.diagram-label-target {
+  fill: #2f8f9d;
+}
+
+.diagram-upper-arm-highlight,
+.diagram-forearm-highlight {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-linecap: round;
+  stroke-width: 5;
+}
+
+.diagram-forearm {
+  transition: transform 80ms linear;
+}
+
+.diagram-hand {
+  fill: #2f3d46;
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 2;
+}
+
+.diagram-thumb {
+  fill: none;
+  stroke: #2f3d46;
+  stroke-linecap: round;
+  stroke-width: 12;
+}
+
+.diagram-elbow circle:first-child {
+  fill: rgba(47, 143, 157, 0.18);
+  stroke: rgba(47, 143, 157, 0.42);
+  stroke-width: 3;
+}
+
+.diagram-elbow circle:nth-child(2) {
+  fill: #2f8f9d;
+  stroke: #f5f2ea;
+  stroke-width: 5;
+}
+
+.diagram-angle-value {
+  fill: var(--color-text) !important;
+  font-size: 22px !important;
+  font-weight: 700;
+}
+
+.diagram-ghost-start rect,
+.diagram-ghost-start path,
+.diagram-ghost-target rect,
+.diagram-ghost-target path {
+  fill: rgba(35, 49, 58, 0.11);
+  stroke: rgba(35, 49, 58, 0.2);
+  stroke-dasharray: 7 8;
+  stroke-width: 2;
+}
+
+.diagram-ghost-target rect,
+.diagram-ghost-target path {
+  fill: rgba(183, 161, 91, 0.16);
+  stroke: rgba(183, 161, 91, 0.36);
+}
+
+.diagram-motion-arc {
+  fill: none;
+  stroke: #2f8f9d;
+  stroke-linecap: round;
+  stroke-width: 5;
+}
+
+.diagram-target-zone {
+  fill: none;
+  stroke: rgba(183, 161, 91, 0.7);
+  stroke-linecap: round;
+  stroke-width: 14;
+}
+
+.diagram-callouts line {
+  stroke: rgba(26, 25, 23, 0.24);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.movement-diagram-label {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: rgba(245, 242, 234, 0.9);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  padding: 10px 15px;
+  text-transform: uppercase;
+}
+
+.movement-diagram-label strong {
+  color: #2f8f9d;
+  font-size: 0.82rem;
+}
+
+.movement-phase-row {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.movement-phase-row span {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: rgba(245, 242, 234, 0.86);
+  color: var(--color-step-badge-text);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  padding: 9px 10px;
+  text-align: center;
+  text-transform: uppercase;
+  transition: background var(--transition-standard), border-color var(--transition-standard), color var(--transition-standard);
+}
+
+.movement-phase-row span[data-active="true"] {
+  border-color: rgba(47, 143, 157, 0.4);
+  background: #23313a;
+  color: #f5f2ea;
+}
+
+.ideal-model {
+  position: relative;
+  min-height: clamp(500px, 48vw, 680px);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 50% 58%, rgba(192, 57, 43, 0.08), transparent 24%),
+    radial-gradient(circle at 44% 52%, rgba(255, 255, 255, 0.58), transparent 36%),
     radial-gradient(circle, rgba(0, 0, 0, 0.06) 0 1px, transparent 1.2px),
     var(--color-surface-2);
   background-size: auto, 10px 10px, auto;
@@ -406,24 +608,24 @@ button:disabled {
 
 .ideal-model-label {
   position: absolute;
-  left: 18px;
-  top: 18px;
+  left: 20px;
+  top: 20px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   letter-spacing: 0.1em;
-  padding: 9px 13px;
+  padding: 10px 15px;
   text-transform: uppercase;
 }
 
 .ideal-model-steps {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 18px;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
@@ -440,6 +642,13 @@ button:disabled {
   padding: 8px 10px;
   text-align: center;
   text-transform: uppercase;
+  transition: background var(--transition-standard), border-color var(--transition-standard), color var(--transition-standard);
+}
+
+.ideal-model-steps span[data-active="true"] {
+  border-color: rgba(192, 57, 43, 0.35);
+  background: var(--color-cta-bg);
+  color: var(--color-cta-text);
 }
 
 .clinical-note {
@@ -535,6 +744,7 @@ button:disabled {
 }
 
 .live-session-layout {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1.32fr) minmax(300px, 0.68fr);
   gap: 16px;
@@ -802,21 +1012,63 @@ button:disabled {
 }
 
 .status-almost_there,
-.status-hold_longer {
+.status-bend_more,
+.status-straighten_more,
+.status-hold_longer,
+.status-rep_complete {
   color: var(--amber);
 }
 
 .status-too_fast,
 .status-too_jittery,
+.status-keep_upper_arm_still,
 .status-error {
   color: var(--coral);
 }
 
 .angle-stage {
+  position: relative;
   display: grid;
   gap: 16px;
   min-height: 310px;
   place-items: center;
+}
+
+.countdown-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(17, 17, 16, 0.62);
+  backdrop-filter: blur(8px);
+  text-align: center;
+}
+
+.countdown-overlay-page {
+  position: fixed;
+  z-index: 100;
+  border-radius: 0;
+}
+
+.countdown-overlay > div {
+  display: grid;
+  gap: 10px;
+  min-width: min(340px, 80%);
+  border: 1px solid rgba(245, 242, 234, 0.18);
+  border-radius: 20px;
+  background: rgba(245, 242, 234, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 12px 32px rgba(0, 0, 0, 0.06);
+  padding: clamp(2rem, 6vw, 4rem);
+}
+
+.countdown-overlay strong {
+  color: #1a1917;
+  font-family: var(--font-display, Georgia, serif);
+  font-size: clamp(5rem, 16vw, 11rem);
+  font-weight: 400;
+  line-height: 0.85;
 }
 
 .live-panel-real .angle-stage {
@@ -1340,6 +1592,88 @@ button:disabled {
   margin: 10px 0 0;
 }
 
+.summary-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.summary-issue {
+  margin-top: 14px;
+}
+
+.summary-issue strong {
+  color: var(--color-text);
+}
+
+.rep-timing-list,
+.rep-breakdown {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.rep-timing-row {
+  display: grid;
+  grid-template-columns: 0.8fr 0.9fr 0.9fr 1fr;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 8px;
+}
+
+.rep-timing-row strong,
+.rep-breakdown-table strong {
+  color: var(--color-text);
+}
+
+.rep-timing-row span,
+.rep-breakdown-heading span,
+.rep-breakdown-table span {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.rep-breakdown-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.rep-breakdown-table {
+  display: grid;
+  grid-template-columns: 0.5fr 1fr repeat(5, minmax(82px, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.rep-breakdown-table > * {
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 12px;
+}
+
+.rep-breakdown-table > *:nth-child(-n + 7) {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rep-breakdown-table > *:nth-last-child(-n + 7) {
+  border-bottom: 0;
+}
+
+.progress-history-label {
+  margin-top: 18px;
+}
+
 @media (max-width: 1050px) {
   .app-frame,
   .preview-layout,
@@ -1368,6 +1702,7 @@ button:disabled {
   .dashboard-grid,
   .metric-grid,
   .metric-grid-real,
+  .summary-metric-grid,
   .integration-panel {
     grid-template-columns: 1fr;
   }
@@ -2005,6 +2340,7 @@ button:disabled {
 .live-session-layout {
   grid-template-columns: minmax(0, 1.72fr) minmax(380px, 0.58fr);
   align-items: start;
+  position: relative;
 }
 
 .live-panel {
@@ -2140,9 +2476,13 @@ button:disabled {
 
 .status-good_form,
 .status-almost_there,
+.status-bend_more,
+.status-straighten_more,
 .status-hold_longer,
+.status-rep_complete,
 .status-too_fast,
 .status-too_jittery,
+.status-keep_upper_arm_still,
 .status-error {
   color: var(--color-step-badge-text);
 }

@@ -47,15 +47,39 @@ class SQLitePhysioStore:
                     timestamp_ms INTEGER NOT NULL,
                     exercise TEXT NOT NULL,
                     side TEXT NOT NULL,
+                    sensor_status TEXT,
+                    camera_status TEXT,
+                    distance_cm REAL,
+                    sensor_jitter_score REAL,
+                    opencv_jitter_score REAL,
+                    combined_jitter_score REAL,
+                    rep_count INTEGER,
+                    coach_state TEXT,
+                    physio_score INTEGER,
+                    voice_status TEXT,
+                    avatar_status TEXT,
                     payload_json TEXT NOT NULL,
                     created_at_ms INTEGER NOT NULL
                 )
                 """
             )
+            self._ensure_packet_columns(connection)
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_packets_session_timestamp
                 ON packets(session_id, timestamp_ms)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_packets_exercise_source
+                ON packets(exercise, source)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_packets_sensor_status
+                ON packets(sensor_status)
                 """
             )
             connection.execute(
@@ -69,6 +93,28 @@ class SQLitePhysioStore:
                 """
             )
             connection.commit()
+
+    def _ensure_packet_columns(self, connection: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(packets)").fetchall()
+        }
+        columns = {
+            "sensor_status": "TEXT",
+            "camera_status": "TEXT",
+            "distance_cm": "REAL",
+            "sensor_jitter_score": "REAL",
+            "opencv_jitter_score": "REAL",
+            "combined_jitter_score": "REAL",
+            "rep_count": "INTEGER",
+            "coach_state": "TEXT",
+            "physio_score": "INTEGER",
+            "voice_status": "TEXT",
+            "avatar_status": "TEXT",
+        }
+        for name, sql_type in columns.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE packets ADD COLUMN {name} {sql_type}")
 
     def save_session_start(
         self,
@@ -98,8 +144,27 @@ class SQLitePhysioStore:
             connection.execute(
                 """
                 INSERT INTO packets
-                (session_id, source, timestamp_ms, exercise, side, payload_json, created_at_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (
+                    session_id,
+                    source,
+                    timestamp_ms,
+                    exercise,
+                    side,
+                    sensor_status,
+                    camera_status,
+                    distance_cm,
+                    sensor_jitter_score,
+                    opencv_jitter_score,
+                    combined_jitter_score,
+                    rep_count,
+                    coach_state,
+                    physio_score,
+                    voice_status,
+                    avatar_status,
+                    payload_json,
+                    created_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     packet.session_id,
@@ -107,6 +172,17 @@ class SQLitePhysioStore:
                     packet.timestamp_ms,
                     packet.exercise,
                     packet.side,
+                    packet.sensor_status,
+                    packet.camera_status,
+                    packet.distance_cm,
+                    packet.sensor_jitter_score,
+                    packet.opencv_jitter_score,
+                    packet.combined_jitter_score,
+                    packet.rep_count,
+                    packet.coach_state,
+                    packet.physio_score,
+                    packet.voice_status,
+                    packet.avatar_status,
                     packet.model_dump_json(),
                     now_ms,
                 ),

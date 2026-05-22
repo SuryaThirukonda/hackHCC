@@ -1,5 +1,5 @@
 import { ArrowLeft, Camera, CheckCircle2, Play, Target } from "lucide-react";
-import IdealElbowFlexionModel from "./IdealElbowFlexionModel.jsx";
+import ExerciseMovementDiagram from "./ExerciseMovementDiagram.jsx";
 
 export default function ExercisePreview({ exercise, onBack, onBegin }) {
   const targetRange = exercise.targetPosition
@@ -42,11 +42,11 @@ export default function ExercisePreview({ exercise, onBack, onBegin }) {
       </section>
 
       <aside className="movement-preview">
-        <IdealElbowFlexionModel />
+        <ExerciseMovementDiagram exerciseId={exercise.id} />
         <div>
           <p className="eyebrow">Ideal movement preview</p>
           <h3>Extend, bend, hold, straighten.</h3>
-          <p>The 3D arm is instructional only. Live analysis still comes from webcam landmarks.</p>
+          <p>This clinical diagram is instructional only. Live analysis still comes from webcam landmarks.</p>
         </div>
       </aside>
     </div>

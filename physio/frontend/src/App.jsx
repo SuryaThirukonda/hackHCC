@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -24,11 +24,20 @@ import {
   startSession
 } from "./api/client.js";
 import CoachPanel from "./components/CoachPanel.jsx";
+import CountdownOverlay from "./components/CountdownOverlay.jsx";
 import ExercisePreview from "./components/ExercisePreview.jsx";
 import LiveSession from "./components/LiveSession.jsx";
 import ProgressDashboard from "./components/ProgressDashboard.jsx";
 import SessionSummary from "./components/SessionSummary.jsx";
 import { defaultExercise, exercises } from "./exercises/index.js";
+import {
+  RUNNER_EVENTS,
+  RUNNER_STATES,
+  createInitialExerciseRunnerState,
+  exerciseRunnerReducer,
+  isRecordingState,
+  summarizeRunnerSession
+} from "./state/exerciseRunner.js";
 
 const navItems = [
   { id: "exercises", label: "Exercises", icon: Dumbbell },
@@ -37,6 +46,8 @@ const navItems = [
   { id: "progress", label: "Progress", icon: BarChart3 },
   { id: "debug", label: "Debug", icon: FlaskConical }
 ];
+
+const LOCAL_SESSION_HISTORY_KEY = "physio_elbow_completed_sessions";
 
 function initialSourceMode() {
   const requested = new URLSearchParams(window.location.search).get("source");
@@ -51,6 +62,7 @@ export default function App() {
   const [packet, setPacket] = useState(null);
   const [cue, setCue] = useState(null);
   const [sessions, setSessions] = useState([]);
+  const [localSessions, setLocalSessions] = useState(() => loadLocalSessionHistory());
   const [summary, setSummary] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [live, setLive] = useState(true);
@@ -59,6 +71,12 @@ export default function App() {
   const [frameTick, setFrameTick] = useState(Date.now());
   const [health, setHealth] = useState("checking");
   const [error, setError] = useState("");
+  const [runner, dispatchRunner] = useReducer(
+    exerciseRunnerReducer,
+    createInitialExerciseRunnerState(defaultExercise)
+  );
+  const [countdownValue, setCountdownValue] = useState(null);
+  const sessionStartTokenRef = useRef(0);
 
   useEffect(() => {
     getHealth()
@@ -122,17 +140,48 @@ export default function App() {
 
   const sessionLabel = useMemo(() => sessionId || packet?.session_id || "local-webcam-session", [packet, sessionId]);
 
+  useEffect(() => {
+    if (runner.status !== RUNNER_STATES.COUNTDOWN) {
+      setCountdownValue(null);
+      return undefined;
+    }
+
+    const sequence = ["3", "2", "1", "Go"];
+    let index = 0;
+    setCountdownValue(sequence[index]);
+    const id = window.setInterval(() => {
+      index += 1;
+      if (index >= sequence.length) {
+        window.clearInterval(id);
+        setCountdownValue(null);
+        dispatchRunner({ type: RUNNER_EVENTS.COUNTDOWN_COMPLETE, startedAt: new Date().toISOString() });
+        return;
+      }
+      setCountdownValue(sequence[index]);
+    }, 900);
+
+    return () => window.clearInterval(id);
+  }, [runner.status]);
+
   const handleBrowserPacket = useCallback(async (nextPacket) => {
     if (sourceMode !== "browser") return;
     setPacket(nextPacket);
     setError("");
+    if (isRecordingState(runner.status)) {
+      dispatchRunner({
+        type: "PACKET_RECORDED",
+        packet: nextPacket,
+        analyzerOutput: nextPacket.analyzer_output || null,
+        completedRep: nextPacket.completed_rep || null
+      });
+    }
     try {
       const nextCue = await getCoachCue(nextPacket);
       setCue(nextCue);
     } catch {
       setCue(null);
     }
-  }, [sourceMode]);
+  }, [runner.status, sourceMode]);
 
   async function refreshSessions() {
     try {
@@ -144,35 +193,75 @@ export default function App() {
 
   async function beginExercise() {
     setSourceMode("browser");
-    const response = await startSession({
-      user_id: "demo-user",
-      exercise: selectedExercise.id,
-      side: selectedExercise.side || "right",
-      target_angle: selectedExercise.targetPosition?.elbowAngleMax || 90
-    });
-    setSessionId(response.session_id);
+    const sessionToken = sessionStartTokenRef.current + 1;
+    sessionStartTokenRef.current = sessionToken;
+    const provisionalSessionId = `browser-webcam-${Date.now()}`;
+    const targetAngle = selectedExercise.targetPosition
+      ? (selectedExercise.targetPosition.elbowAngleMin + selectedExercise.targetPosition.elbowAngleMax) / 2
+      : 90;
+    setSessionId(provisionalSessionId);
     setSummary(null);
+    setPacket(null);
+    setCue(null);
+    setError("");
     setLive(true);
     setActiveTab("live");
+    dispatchRunner({
+      type: RUNNER_EVENTS.START_COUNTDOWN,
+      sessionId: provisionalSessionId
+    });
+
+    try {
+      const response = await startSession({
+        user_id: "demo-user",
+        exercise: selectedExercise.id,
+        side: selectedExercise.side || "right",
+        target_angle: targetAngle
+      });
+      if (sessionStartTokenRef.current === sessionToken) {
+        setSessionId(response.session_id);
+      }
+    } catch (err) {
+      if (sessionStartTokenRef.current === sessionToken) {
+        setError(err.message);
+      }
+    }
   }
 
   async function handleEnd() {
     const activeSession = sessionId || packet?.session_id || "local-webcam-session";
-    const nextSummary = await endSession({
-      session_id: activeSession,
-      pain_level: 2,
-      fatigue_level: 4
+    const localSummary = summarizeRunnerSession(runner, {
+      sessionId: activeSession,
+      exercise: selectedExercise,
+      painLevel: 2,
+      fatigueLevel: 4
     });
-    setSummary(nextSummary);
+    setSummary(localSummary);
+    setLocalSessions((items) => {
+      const next = [localSummary, ...items.filter((item) => item.session_id !== localSummary.session_id)].slice(0, 12);
+      saveLocalSessionHistory(next);
+      return next;
+    });
     setSessionId(null);
     setActiveTab("results");
-    await refreshSessions();
+    dispatchRunner({ type: RUNNER_EVENTS.END_SESSION });
+    try {
+      await endSession({
+        session_id: activeSession,
+        pain_level: 2,
+        fatigue_level: 4
+      });
+      await refreshSessions();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   function handleExerciseStart(exercise) {
     if (exercise.status !== "ready") return;
     setSelectedExercise(exercise);
     setShowExerciseDetail(true);
+    dispatchRunner({ type: RUNNER_EVENTS.SELECT_EXERCISE, exercise });
   }
 
   const pageTitle = {
@@ -285,6 +374,9 @@ export default function App() {
             sessionLabel={sessionLabel}
             frameTick={frameTick}
             onBrowserPacket={handleBrowserPacket}
+            runnerStatus={runner.status}
+            completedReps={runner.completedReps}
+            countdownValue={countdownValue}
           />
         )}
 
@@ -293,7 +385,7 @@ export default function App() {
         )}
 
         {activeTab === "progress" && (
-          <ProgressDashboard packet={packet} sessions={sessions} sourceMode={sourceMode} />
+          <ProgressDashboard packet={packet} sessions={sessions} localSessions={localSessions} sourceMode={sourceMode} />
         )}
 
         {activeTab === "debug" && (
@@ -305,12 +397,31 @@ export default function App() {
             sourceStatus={sourceStatus}
             sessions={sessions}
             summary={summary}
+            runner={runner}
+            localSessions={localSessions}
           />
         )}
         <footer className="footer-wordmark" aria-hidden="true">physio</footer>
       </section>
     </main>
   );
+}
+
+function loadLocalSessionHistory() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LOCAL_SESSION_HISTORY_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalSessionHistory(items) {
+  try {
+    window.localStorage.setItem(LOCAL_SESSION_HISTORY_KEY, JSON.stringify(items));
+  } catch {
+    // Local history is a convenience for the demo; failing to persist should not block the session.
+  }
 }
 
 function ExercisesPage({ exercises: exerciseList, onStart }) {
@@ -367,9 +478,30 @@ function ExercisesPage({ exercises: exerciseList, onStart }) {
   );
 }
 
-function LiveSessionPage({ packet, cue, selectedExercise, sourceStatus, sessionLabel, frameTick, onBrowserPacket }) {
+function LiveSessionPage({
+  packet,
+  cue,
+  selectedExercise,
+  sourceStatus,
+  sessionLabel,
+  frameTick,
+  onBrowserPacket,
+  runnerStatus,
+  completedReps,
+  countdownValue
+}) {
+  const recordingActive = runnerStatus === RUNNER_STATES.ACTIVE;
+  const currentPhase = packet?.analyzer_phase_label || {
+    idle: "Start straight",
+    resting: "Ready",
+    raising: "Bending",
+    holding: "Hold",
+    lowering: "Straighten",
+    rep_complete: "Rep complete"
+  }[packet?.rep_phase] || packet?.rep_phase || "waiting";
   return (
     <div className="live-session-layout">
+      <CountdownOverlay value={countdownValue} variant="page" />
       <section className="live-session-main">
         <LiveSession
           packet={packet}
@@ -379,7 +511,9 @@ function LiveSessionPage({ packet, cue, selectedExercise, sourceStatus, sessionL
           frameTick={frameTick}
           onBrowserPacket={onBrowserPacket}
           showDebug={false}
+          exercise={selectedExercise}
           exerciseTitle={selectedExercise.name}
+          recordingActive={recordingActive}
         />
       </section>
       <aside className="session-side">
@@ -389,13 +523,38 @@ function LiveSessionPage({ packet, cue, selectedExercise, sourceStatus, sessionL
           <h2>{selectedExercise.name}</h2>
           <div className="status-list">
             <span>Source <strong>Live Webcam Analysis</strong></span>
-            <span>Rep goal <strong>{selectedExercise.repGoal}</strong></span>
-            <span>Phase <strong>{packet?.rep_phase || "waiting"}</strong></span>
+            <span>Reps completed <strong>{packet?.rep_count ?? completedReps.length}/{selectedExercise.repGoal}</strong></span>
+            <span>Runner <strong>{runnerStatus}</strong></span>
+            <span>Phase <strong>{currentPhase}</strong></span>
             <span>Confidence <strong>{packet ? packet.landmark_confidence.toFixed(3) : "--"}</strong></span>
           </div>
         </section>
+        <RepTimingPanel reps={completedReps} />
       </aside>
     </div>
+  );
+}
+
+function RepTimingPanel({ reps = [] }) {
+  return (
+    <section className="session-status-card">
+      <p className="eyebrow">Rep timing</p>
+      <h2>{reps.length} completed</h2>
+      {reps.length ? (
+        <div className="rep-timing-list">
+          {reps.slice(-6).map((rep) => (
+            <article key={rep.rep_index} className="rep-timing-row">
+              <strong>Rep {rep.rep_index}</strong>
+              <span>{formatSeconds(rep.rep_duration_sec)} total</span>
+              <span>{formatSeconds(rep.hold_time_sec)} hold</span>
+              <span>{formatMaybe(rep.range_of_motion)} deg ROM</span>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">Complete a bend, hold, and straighten cycle to log rep timing.</p>
+      )}
+    </section>
   );
 }
 
@@ -412,7 +571,7 @@ function ResultsPage({ summary, selectedExercise }) {
   return <SessionSummary summary={summary} />;
 }
 
-function DebugPage({ packet, health, sourceMode, setSourceMode, sourceStatus, sessions, summary }) {
+function DebugPage({ packet, health, sourceMode, setSourceMode, sourceStatus, sessions, summary, runner, localSessions }) {
   return (
     <div className="debug-layout">
       <section className="debug-card">
@@ -455,11 +614,29 @@ function DebugPage({ packet, health, sourceMode, setSourceMode, sourceStatus, se
       </section>
 
       <section className="debug-card debug-json">
-        <p className="eyebrow">Raw packet JSON</p>
-        <pre>{JSON.stringify({ packet, sourceStatus, summary, sessions }, null, 2)}</pre>
+        <p className="eyebrow">Latest analyzer output</p>
+        <pre>{JSON.stringify(runner.latestAnalyzerOutput || packet?.analyzer_output || null, null, 2)}</pre>
+      </section>
+
+      <section className="debug-card debug-json">
+        <p className="eyebrow">Completed reps JSON</p>
+        <pre>{JSON.stringify(runner.completedReps, null, 2)}</pre>
+      </section>
+
+      <section className="debug-card debug-json">
+        <p className="eyebrow">Raw tracking packet / session state</p>
+        <pre>{JSON.stringify({ packet, sourceStatus, summary, sessions, localSessions, runner }, null, 2)}</pre>
       </section>
     </div>
   );
+}
+
+function formatSeconds(value) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}s` : "--";
+}
+
+function formatMaybe(value) {
+  return Number.isFinite(value) ? value.toFixed(1) : "--";
 }
 
 function IntegrationStatus({ health, packet, sourceMode, sourceStatus }) {

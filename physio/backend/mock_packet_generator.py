@@ -11,7 +11,12 @@ class MockPacketGenerator:
     def __init__(self) -> None:
         self.started = time.time()
 
-    def next_packet(self, session_id: str = "mock-session", target_angle: float = 90) -> PhysioPacket:
+    def next_packet(
+        self,
+        session_id: str = "mock-session",
+        target_angle: float = 90,
+        exercise: str = "elbow_flexion_extension",
+    ) -> PhysioPacket:
         elapsed = time.time() - self.started
         cycle = (elapsed % 6.0) / 6.0
         wave = (1 - math.cos(cycle * math.tau)) / 2
@@ -55,7 +60,7 @@ class MockPacketGenerator:
             source="mock",
             session_id=session_id,
             timestamp_ms=int(time.time() * 1000),
-            exercise="right_arm_raise",
+            exercise=exercise,
             side="right",
             device_id="sensor-mock",
             sensor_status="ok",

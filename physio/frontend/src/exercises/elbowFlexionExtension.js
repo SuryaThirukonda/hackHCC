@@ -29,7 +29,7 @@ export const elbowFlexionExtension = {
   minRepSeconds: 2.0,
   maxRepSeconds: 6.0,
   jitterThreshold: 0.35,
-  shoulderDriftThreshold: 18,
+  shoulderDriftThreshold: 28,
   metrics: [
     "elbow_angle",
     "shoulder_angle",

@@ -15,10 +15,14 @@ Compensation = Literal["none", "shoulder_shrug", "torso_lean", "low_confidence",
 CoachState = Literal[
     "good_form",
     "almost_there",
+    "bend_more",
+    "straighten_more",
     "too_fast",
     "too_jittery",
     "hold_longer",
+    "keep_upper_arm_still",
     "low_confidence",
+    "rep_complete",
     "rest_needed",
     "session_complete",
     "error"
@@ -46,7 +50,7 @@ class PosePacket(BaseModel):
     timestamp_ms: int
     camera_status: CameraStatus
     landmark_confidence: float = Field(ge=0, le=1)
-    exercise: str = "right_arm_raise"
+    exercise: str = "elbow_flexion_extension"
     side: Side = "right"
     shoulder_angle: float | None
     elbow_angle: float | None
@@ -64,7 +68,7 @@ class PhysioPacket(BaseModel):
     source: PacketSource = "mock"
     session_id: str
     timestamp_ms: int
-    exercise: str = "right_arm_raise"
+    exercise: str = "elbow_flexion_extension"
     side: Side = "right"
     device_id: str
     sensor_status: SensorStatus
@@ -106,7 +110,7 @@ class PhysioPacket(BaseModel):
 
 class SessionStartRequest(BaseModel):
     user_id: str = "demo-user"
-    exercise: str = "right_arm_raise"
+    exercise: str = "elbow_flexion_extension"
     side: Side = "right"
     target_angle: float = 90
 

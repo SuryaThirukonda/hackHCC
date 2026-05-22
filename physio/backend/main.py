@@ -41,7 +41,7 @@ app.add_middleware(
 class SessionState:
     session_id: str = "mock-session"
     user_id: str = "demo-user"
-    exercise: str = "right_arm_raise"
+    exercise: str = "elbow_flexion_extension"
     side: str = "right"
     target_angle: float = 90
     started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
@@ -118,7 +118,7 @@ def latest_packet_for_source(source: str) -> PhysioPacket:
             )
         return state.latest_browser_packet
 
-    packet = mock_generator.next_packet(state.session_id, state.target_angle)
+    packet = mock_generator.next_packet(state.session_id, state.target_angle, state.exercise)
     state.latest_packet = packet
     state.latest_mock_packet = packet
     state.active_source = "mock"
@@ -290,13 +290,20 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
 
     ended_at_ms = int(time.time() * 1000)
     total_reps = max(packet.rep_count for packet in packets)
-    clean_reps = sum(
-        1 for packet in packets
-        if packet.rep_phase == "rep_complete" and (packet.physio_score or 0) >= 75
-    )
-    valid_angles = [packet.shoulder_angle for packet in packets if packet.shoulder_angle is not None]
+    clean_rep_indexes = {
+        packet.rep_count for packet in packets
+        if packet.rep_phase == "rep_complete" and packet.rep_count > 0 and (packet.physio_score or 0) >= 75
+    }
+    clean_reps = len(clean_rep_indexes)
+    if state.exercise == "elbow_flexion_extension":
+        valid_angles = [packet.elbow_angle for packet in packets if packet.elbow_angle is not None]
+        best_angle = min(valid_angles) if valid_angles else 0.0
+        summary_angle_label = "best elbow flexion"
+    else:
+        valid_angles = [packet.shoulder_angle for packet in packets if packet.shoulder_angle is not None]
+        best_angle = max(valid_angles) if valid_angles else 0.0
+        summary_angle_label = "best angle"
     valid_scores = [packet.physio_score for packet in packets if packet.physio_score is not None]
-    best_angle = max(valid_angles) if valid_angles else 0.0
     average_angle = sum(valid_angles) / len(valid_angles) if valid_angles else 0.0
     average_score = round(sum(valid_scores) / len(valid_scores)) if valid_scores else 0
     max_jitter = max(packet.combined_jitter_score for packet in packets)
@@ -319,8 +326,8 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         average_jitter_score=round(average_jitter, 2),
         pain_level=request.pain_level,
         fatigue_level=request.fatigue_level,
-        summary_text=f"User completed {total_reps} reps with a best angle of {best_angle:.1f} degrees.",
-        recommendation_text="Repeat this target next session and focus on smooth lowering.",
+        summary_text=f"User completed {total_reps} reps with {summary_angle_label} of {best_angle:.1f} degrees.",
+        recommendation_text="Focus on a controlled bend, brief hold, and smooth straighten phase.",
     )
     store.save_summary(summary)
     return summary

@@ -37,7 +37,15 @@
     "source": { "type": "string", "enum": ["python_opencv", "browser_mediapipe", "mock"] },
     "session_id": { "type": "string" },
     "timestamp_ms": { "type": "integer" },
-    "exercise": { "type": "string", "const": "right_arm_raise" },
+    "exercise": {
+      "type": "string",
+      "enum": [
+        "elbow_flexion_extension",
+        "right_arm_raise",
+        "shoulder_flexion",
+        "wrist_extension"
+      ]
+    },
     "side": { "type": "string", "enum": ["right", "left"] },
     "device_id": { "type": "string" },
     "sensor_status": { "type": "string", "enum": ["ok", "warning", "error", "offline"] },
@@ -72,10 +80,14 @@
       "enum": [
         "good_form",
         "almost_there",
+        "bend_more",
+        "straighten_more",
         "too_fast",
         "too_jittery",
         "hold_longer",
+        "keep_upper_arm_still",
         "low_confidence",
+        "rep_complete",
         "rest_needed",
         "session_complete",
         "error"
