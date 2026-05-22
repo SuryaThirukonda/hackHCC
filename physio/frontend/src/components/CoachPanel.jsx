@@ -1,7 +1,7 @@
 import { Bot, Radio, Volume2 } from "lucide-react";
 
 export default function CoachPanel({ packet, cue }) {
-  const message = cue?.message || packet?.local_coach_message || "Start a mock session to receive coaching.";
+  const message = cue?.message || packet?.local_coach_message || "Begin a live session to receive movement cues.";
 
   return (
     <section className="coach-panel">
@@ -20,7 +20,7 @@ export default function CoachPanel({ packet, cue }) {
         <p className="eyebrow">Coach cue</p>
         <h2>{message}</h2>
         <div className="coach-stats">
-          <span><Radio size={15} /> {cue?.source || "mock"}</span>
+          <span><Radio size={15} /> local cue</span>
           <span><Volume2 size={15} /> {cue?.voice_status || packet?.voice_status || "idle"}</span>
           <span>{cue?.avatar_status || packet?.avatar_status || "idle"} avatar</span>
         </div>

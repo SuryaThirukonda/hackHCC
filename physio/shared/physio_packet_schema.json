@@ -3,6 +3,7 @@
   "title": "PhysioPacket",
   "type": "object",
   "required": [
+    "source",
     "session_id",
     "timestamp_ms",
     "exercise",
@@ -33,6 +34,7 @@
     "voice_status"
   ],
   "properties": {
+    "source": { "type": "string", "enum": ["python_opencv", "browser_mediapipe", "mock"] },
     "session_id": { "type": "string" },
     "timestamp_ms": { "type": "integer" },
     "exercise": { "type": "string", "const": "right_arm_raise" },
@@ -45,8 +47,8 @@
     "opencv_jitter_score": { "type": "number", "minimum": 0, "maximum": 1 },
     "combined_jitter_score": { "type": "number", "minimum": 0, "maximum": 1 },
     "jitter_detected": { "type": "boolean" },
-    "shoulder_angle": { "type": "number" },
-    "elbow_angle": { "type": "number" },
+    "shoulder_angle": { "type": ["number", "null"] },
+    "elbow_angle": { "type": ["number", "null"] },
     "target_angle": { "type": "number" },
     "landmark_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "rep_count": { "type": "integer", "minimum": 0 },
@@ -64,7 +66,7 @@
       "type": "string",
       "enum": ["none", "shoulder_shrug", "torso_lean", "low_confidence", "unknown"]
     },
-    "physio_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "physio_score": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
     "coach_state": {
       "type": "string",
       "enum": [
@@ -82,6 +84,39 @@
     "local_coach_message": { "type": "string" },
     "ai_coach_message": { "type": ["string", "null"] },
     "avatar_status": { "type": "string" },
-    "voice_status": { "type": "string" }
+    "voice_status": { "type": "string" },
+    "pose_detected": { "type": ["boolean", "null"] },
+    "shoulder_present": { "type": ["boolean", "null"] },
+    "elbow_present": { "type": ["boolean", "null"] },
+    "wrist_present": { "type": ["boolean", "null"] },
+    "hip_present": { "type": ["boolean", "null"] },
+    "angle_valid": { "type": ["boolean", "null"] },
+    "using_torso_reference": { "type": ["boolean", "null"] },
+    "using_screen_axis_fallback": { "type": ["boolean", "null"] },
+    "shoulder_coords": {
+      "type": ["object", "null"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "score": { "type": "number" }
+      }
+    },
+    "elbow_coords": {
+      "type": ["object", "null"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "score": { "type": "number" }
+      }
+    },
+    "wrist_coords": {
+      "type": ["object", "null"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "score": { "type": "number" }
+      }
+    },
+    "angle_rejection_reason": { "type": ["string", "null"] }
   }
 }

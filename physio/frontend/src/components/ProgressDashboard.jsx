@@ -1,4 +1,4 @@
-export default function ProgressDashboard({ packet, sessions }) {
+export default function ProgressDashboard({ packet, sessions, sourceMode = "mock" }) {
   const fallbackSessions = [
     {
       session_id: "demo-progress-1",
@@ -25,6 +25,15 @@ export default function ProgressDashboard({ packet, sessions }) {
   const angle = packet?.shoulder_angle ?? 0;
   const score = packet?.physio_score ?? 0;
   const jitter = packet?.combined_jitter_score ?? 0;
+  const sourceLabel = {
+    python_opencv: "Real Python session",
+    browser_mediapipe: "Live Webcam Analysis session",
+    mock: "Mock demo session"
+  }[packet?.source] || {
+    python: "Real Python session",
+    browser: "Live Webcam Analysis session",
+    mock: "Mock demo session"
+  }[sourceMode];
 
   return (
     <section className="progress-panel">
@@ -33,7 +42,10 @@ export default function ProgressDashboard({ packet, sessions }) {
           <p className="eyebrow">Session telemetry</p>
           <h2>Progress dashboard</h2>
         </div>
-        {!sessions.length && <span className="status-pill">demo history</span>}
+        <div className="heading-pills">
+          <span className="status-pill">{sourceLabel}</span>
+          {!sessions.length && <span className="status-pill">demo history</span>}
+        </div>
       </div>
 
       <div className="progress-summary-grid">
@@ -45,8 +57,8 @@ export default function ProgressDashboard({ packet, sessions }) {
       </div>
 
       <div className="signal-row">
-        <Signal label="Angle" value={angle} max={110} />
-        <Signal label="Score" value={score} max={100} />
+        <Signal label="Angle" value={angle} displayValue={packet?.shoulder_angle == null ? "--" : undefined} max={110} />
+        <Signal label="Score" value={score} displayValue={packet?.physio_score == null ? "--" : undefined} max={100} />
         <Signal label="Jitter" value={jitter} max={1} invert />
       </div>
 
@@ -72,7 +84,7 @@ function ProgressStat({ label, value, unit = "" }) {
   );
 }
 
-function Signal({ label, value, max, invert = false }) {
+function Signal({ label, value, max, invert = false, displayValue }) {
   const percent = Math.max(0, Math.min(100, (value / max) * 100));
   const height = invert ? 100 - percent : percent;
   return (
@@ -81,7 +93,7 @@ function Signal({ label, value, max, invert = false }) {
         <span style={{ height: `${height}%` }} />
       </div>
       <p>{label}</p>
-      <strong>{Number(value).toFixed(max === 1 ? 2 : 0)}</strong>
+      <strong>{displayValue ?? Number(value).toFixed(max === 1 ? 2 : 0)}</strong>
     </div>
   );
 }

@@ -6,6 +6,8 @@ const TARGET_ANGLE = 90;
 const TARGET_REPS = 8;
 const DETECT_INTERVAL_MS = 66;
 const POST_INTERVAL_MS = 500;
+const MIN_LANDMARK_CONFIDENCE = 0.45;
+const MIN_PRESENT_SCORE = 0.45;
 
 const POSE = {
   right: { shoulder: 12, elbow: 14, wrist: 16, hip: 24 },
@@ -26,7 +28,7 @@ const COACH_MESSAGES = {
   too_fast: "Slow down and control the movement.",
   too_jittery: "Keep your arm steady and move smoothly.",
   hold_longer: "Hold at the top for one more second.",
-  low_confidence: "Adjust your position so I can see your arm.",
+  low_confidence: "Move your full arm into view.",
   rest_needed: "Take a short rest before the next rep.",
   session_complete: "Session complete. Nice steady work.",
   error: "Something went wrong. Check the sensor or camera."
@@ -37,14 +39,26 @@ function clamp(value, low, high) {
 }
 
 function angle(a, b, c) {
-  if (!a || !b || !c) return 0;
+  if (!a || !b || !c) return null;
   const ba = { x: a.x - b.x, y: a.y - b.y };
   const bc = { x: c.x - b.x, y: c.y - b.y };
   const dot = ba.x * bc.x + ba.y * bc.y;
   const magA = Math.hypot(ba.x, ba.y);
   const magC = Math.hypot(bc.x, bc.y);
-  if (!magA || !magC) return 0;
+  if (!magA || !magC) return null;
   return Math.acos(clamp(dot / (magA * magC), -1, 1)) * 180 / Math.PI;
+}
+
+function finitePoint(point) {
+  return Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
+}
+
+function calculateShoulderRaiseAngleFromScreen(shoulder, elbow) {
+  if (!finitePoint(shoulder) || !finitePoint(elbow)) return null;
+  const dx = elbow.x - shoulder.x;
+  const dy = elbow.y - shoulder.y;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) === 0) return null;
+  return Math.atan2(Math.abs(dx), dy) * 180 / Math.PI;
 }
 
 function rangeStatus(shoulderAngle, targetAngle) {
@@ -56,6 +70,7 @@ function rangeStatus(shoulderAngle, targetAngle) {
 }
 
 function physioScore({ shoulderAngle, combinedJitter, pace, holdTime, confidence, compensation }) {
+  if (shoulderAngle == null) return null;
   const range = Math.min(shoulderAngle / TARGET_ANGLE, 1) * 35;
   const smooth = (1 - clamp(combinedJitter, 0, 1)) * 25;
   const paceScore = { good: 15, too_slow: 8, too_fast: 5, unknown: 8 }[pace] ?? 8;
@@ -67,7 +82,7 @@ function physioScore({ shoulderAngle, combinedJitter, pace, holdTime, confidence
 
 function coachState({ cameraStatus, confidence, combinedJitter, pace, range, phase, holdTime, reps }) {
   if (cameraStatus !== "ok") return "low_confidence";
-  if (confidence < 0.6) return "low_confidence";
+  if (confidence < MIN_LANDMARK_CONFIDENCE) return "low_confidence";
   if (combinedJitter > 0.65) return "too_jittery";
   if (pace === "too_fast") return "too_fast";
   if (range === "almost_there" || range === "too_low") return "almost_there";
@@ -78,6 +93,38 @@ function coachState({ cameraStatus, confidence, combinedJitter, pace, range, pha
 
 function pixel(point, width, height) {
   return { x: point.x * width, y: point.y * height };
+}
+
+function landmarkScore(landmark) {
+  if (!landmark) return 0;
+  const scores = [];
+  if (Number.isFinite(landmark.visibility)) scores.push(landmark.visibility);
+  if (Number.isFinite(landmark.presence)) scores.push(landmark.presence);
+  if (!scores.length) return 0.5;
+  return clamp(Math.min(...scores), 0, 1);
+}
+
+function selectPosePoint(poseLandmarks, index) {
+  const landmark = poseLandmarks?.[index] || null;
+  const score = landmarkScore(landmark);
+  return {
+    point: score >= MIN_PRESENT_SCORE ? landmark : null,
+    score,
+    present: score >= MIN_PRESENT_SCORE
+  };
+}
+
+function formatMaybeAngle(value) {
+  return value == null ? "--" : value.toFixed(1);
+}
+
+function compactPoint(point, score) {
+  if (!point) return null;
+  return {
+    x: Number(point.x.toFixed(3)),
+    y: Number(point.y.toFixed(3)),
+    score: Number(score.toFixed(3))
+  };
 }
 
 function drawPoint(ctx, point, color, radius = 7) {
@@ -112,6 +159,7 @@ function useRepCounter() {
 }
 
 function updateRep(rep, shoulderAngle) {
+  if (shoulderAngle == null) return;
   const now = performance.now();
   if (shoulderAngle < 30) {
     if (rep.reachedTarget) {
@@ -139,7 +187,18 @@ function updateRep(rep, shoulderAngle) {
   rep.phase = rep.reachedTarget ? "lowering" : "raising";
 }
 
+function invalidateRep(rep) {
+  rep.phase = "idle";
+  rep.reachedTarget = false;
+  rep.holdStartedAt = null;
+  rep.holdTime = 0;
+}
+
 function updateMotion(samples, timestamp, shoulderAngle) {
+  if (shoulderAngle == null) {
+    samples.length = 0;
+    return { pace: "unknown", jitter: 0, velocity: 0 };
+  }
   samples.push({ timestamp, shoulderAngle });
   while (samples.length > 18) samples.shift();
   if (samples.length < 3) return { pace: "unknown", jitter: 0, velocity: 0 };
@@ -164,7 +223,8 @@ function updateMotion(samples, timestamp, shoulderAngle) {
   return { pace, jitter, velocity };
 }
 
-export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
+export default function BrowserPoseOverlay({ active, sessionId, onPacket, side = "right" }) {
+  const activeSide = POSE[side] ? side : "right";
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -178,10 +238,15 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
   const latestPacketRef = useRef(null);
   const latestPoseRef = useRef(null);
   const latestHandsRef = useRef([]);
+  const debugModeRef = useRef(false);
   const [cameraState, setCameraState] = useState("idle");
   const [cameraError, setCameraError] = useState("");
+  const [debugMode, setDebugMode] = useState(false);
 
   useEffect(() => () => stopCamera(), []);
+  useEffect(() => {
+    debugModeRef.current = debugMode;
+  }, [debugMode]);
 
   async function loadLandmarkers(delegate = "GPU") {
     const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
@@ -263,32 +328,53 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
   }
 
   function buildPacket(poseLandmarks, handLandmarks, timestampMs) {
-    const indices = POSE.right;
-    const point = (index) => {
-      const landmark = poseLandmarks?.[index];
-      if (!landmark) return null;
-      const visibility = landmark.visibility ?? 1;
-      return visibility >= 0.45 ? landmark : null;
-    };
+    const indices = POSE[activeSide];
+    const poseDetected = Boolean(poseLandmarks?.length);
+    const shoulderSample = selectPosePoint(poseLandmarks, indices.shoulder);
+    const elbowSample = selectPosePoint(poseLandmarks, indices.elbow);
+    const wristSample = selectPosePoint(poseLandmarks, indices.wrist);
+    const hipSample = selectPosePoint(poseLandmarks, indices.hip);
+    const shoulder = shoulderSample.point;
+    const elbow = elbowSample.point;
+    const wrist = wristSample.point;
+    const hip = hipSample.point;
+    const confidence = (shoulderSample.score + elbowSample.score + wristSample.score) / 3;
+    const hasArmLandmarks = shoulderSample.present && elbowSample.present && wristSample.present;
+    const coordinatesFinite = finitePoint(shoulder) && finitePoint(elbow) && finitePoint(wrist);
+    const baseReady = poseDetected && hasArmLandmarks && coordinatesFinite && confidence >= MIN_LANDMARK_CONFIDENCE;
+    const usingTorsoReference = baseReady && hipSample.present && finitePoint(hip);
+    const usingScreenAxisFallback = baseReady && !usingTorsoReference;
+    const shoulderAngle = baseReady
+      ? (usingTorsoReference ? angle(hip, shoulder, wrist) : calculateShoulderRaiseAngleFromScreen(shoulder, elbow))
+      : null;
+    const elbowAngle = baseReady ? angle(shoulder, elbow, wrist) : null;
+    const calculatedAngles = shoulderAngle != null && elbowAngle != null;
+    const validAnalysis = baseReady && calculatedAngles;
+    const angleRejectionReason = validAnalysis
+      ? "none"
+      : !poseDetected
+        ? "pose_not_detected"
+        : !hasArmLandmarks
+          ? "missing_shoulder_elbow_or_wrist"
+          : !coordinatesFinite
+            ? "non_finite_coordinates"
+            : confidence < MIN_LANDMARK_CONFIDENCE
+              ? "low_landmark_confidence"
+              : "angle_calculation_failed";
+    const cameraStatus = validAnalysis ? "ok" : "warning";
+    const compensation = validAnalysis ? "none" : "low_confidence";
 
-    const shoulder = point(indices.shoulder);
-    const elbow = point(indices.elbow);
-    const wrist = point(indices.wrist);
-    const hip = point(indices.hip);
-    const cameraStatus = shoulder && elbow && wrist && hip ? "ok" : "warning";
-    const shoulderAngle = cameraStatus === "ok" ? angle(hip, shoulder, wrist) : 0;
-    const elbowAngle = cameraStatus === "ok" ? angle(shoulder, elbow, wrist) : 0;
-    const confidence = cameraStatus === "ok"
-      ? [shoulder, elbow, wrist, hip].reduce((sum, item) => sum + (item.visibility ?? 1), 0) / 4
-      : 0;
-    const handDetected = handLandmarks.length > 0;
-    const compensation = handDetected && confidence >= 0.6 ? "none" : "low_confidence";
-    updateRep(repRef.current, shoulderAngle);
-    const motion = updateMotion(samplesRef.current, timestampMs, shoulderAngle);
-    const combinedJitter = motion.jitter / 2;
-    const currentRange = cameraStatus === "ok" ? rangeStatus(shoulderAngle, TARGET_ANGLE) : "unknown";
+    if (validAnalysis) {
+      updateRep(repRef.current, shoulderAngle);
+    } else {
+      invalidateRep(repRef.current);
+    }
+
+    const motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? shoulderAngle : null);
+    const combinedJitter = validAnalysis ? motion.jitter / 2 : 0;
+    const currentRange = validAnalysis ? rangeStatus(shoulderAngle, TARGET_ANGLE) : "unknown";
     const score = physioScore({
-      shoulderAngle,
+      shoulderAngle: validAnalysis ? shoulderAngle : null,
       combinedJitter,
       pace: motion.pace,
       holdTime: repRef.current.holdTime,
@@ -307,10 +393,11 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
     });
 
     return {
+      source: "browser_mediapipe",
       session_id: sessionId || "browser-webcam",
       timestamp_ms: Math.round(Date.now()),
       exercise: "right_arm_raise",
-      side: "right",
+      side: activeSide,
       device_id: "browser-webcam",
       sensor_status: "offline",
       camera_status: cameraStatus,
@@ -318,13 +405,13 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
       sensor_jitter_score: 0,
       opencv_jitter_score: Number(motion.jitter.toFixed(3)),
       combined_jitter_score: Number(combinedJitter.toFixed(3)),
-      jitter_detected: combinedJitter > 0.65,
-      shoulder_angle: Number(shoulderAngle.toFixed(1)),
-      elbow_angle: Number(elbowAngle.toFixed(1)),
+      jitter_detected: validAnalysis && combinedJitter > 0.65,
+      shoulder_angle: validAnalysis ? Number(shoulderAngle.toFixed(1)) : null,
+      elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
       target_angle: TARGET_ANGLE,
       landmark_confidence: Number(confidence.toFixed(3)),
       rep_count: repRef.current.count,
-      rep_phase: cameraStatus === "ok" ? repRef.current.phase : "idle",
+      rep_phase: validAnalysis ? repRef.current.phase : "idle",
       hold_time_sec: Number(repRef.current.holdTime.toFixed(1)),
       pace: motion.pace,
       range_status: currentRange,
@@ -334,7 +421,24 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
       local_coach_message: COACH_MESSAGES[state],
       ai_coach_message: null,
       avatar_status: "idle",
-      voice_status: "idle"
+      voice_status: "idle",
+      pose_detected: poseDetected,
+      shoulder_present: shoulderSample.present,
+      elbow_present: elbowSample.present,
+      wrist_present: wristSample.present,
+      hip_present: hipSample.present,
+      angle_valid: validAnalysis,
+      using_torso_reference: usingTorsoReference,
+      using_screen_axis_fallback: usingScreenAxisFallback,
+      shoulder_coords: compactPoint(shoulder, shoulderSample.score),
+      elbow_coords: compactPoint(elbow, elbowSample.score),
+      wrist_coords: compactPoint(wrist, wristSample.score),
+      angle_rejection_reason: angleRejectionReason,
+      _debug_landmarks: {
+        shoulder: compactPoint(shoulder, shoulderSample.score),
+        elbow: compactPoint(elbow, elbowSample.score),
+        wrist: compactPoint(wrist, wristSample.score)
+      }
     };
   }
 
@@ -347,8 +451,8 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
     ctx.fillText("Physio | browser webcam tracking", 28, 44);
     ctx.fillStyle = "#f4f1e8";
     ctx.font = "700 18px Segoe UI";
-    ctx.fillText(`Shoulder ${packet.shoulder_angle.toFixed(1)} deg | Elbow ${packet.elbow_angle.toFixed(1)} deg`, 28, 78);
-    ctx.fillText(`Rep ${packet.rep_count} | ${packet.rep_phase} | Score ${packet.physio_score}`, 28, 110);
+    ctx.fillText(`Shoulder ${formatMaybeAngle(packet.shoulder_angle)} deg | Elbow ${formatMaybeAngle(packet.elbow_angle)} deg`, 28, 78);
+    ctx.fillText(`Rep ${packet.rep_count} | ${packet.rep_phase} | Score ${packet.physio_score ?? "--"}`, 28, 110);
     ctx.fillText(packet.local_coach_message, 28, 142);
 
     for (const landmarks of handLandmarks) {
@@ -362,23 +466,43 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
     }
 
     if (poseLandmarks?.length) {
-      const indices = POSE.right;
-      const shoulder = pixel(poseLandmarks[indices.shoulder], width, height);
-      const elbow = pixel(poseLandmarks[indices.elbow], width, height);
-      const wrist = pixel(poseLandmarks[indices.wrist], width, height);
-      const hip = pixel(poseLandmarks[indices.hip], width, height);
-      drawLine(ctx, hip, shoulder, "rgba(244,241,232,.45)", 3);
-      drawLine(ctx, shoulder, elbow, "#f4b95f", 6);
-      drawLine(ctx, elbow, wrist, "#56d8a7", 6);
-      drawPoint(ctx, shoulder, "#f4b95f");
-      drawPoint(ctx, elbow, "#56d8a7");
-      drawPoint(ctx, wrist, "#ff7464");
+      const indices = POSE[activeSide];
+      const shoulderSample = selectPosePoint(poseLandmarks, indices.shoulder);
+      const elbowSample = selectPosePoint(poseLandmarks, indices.elbow);
+      const wristSample = selectPosePoint(poseLandmarks, indices.wrist);
+      const hipSample = selectPosePoint(poseLandmarks, indices.hip);
+      const shoulder = shoulderSample.point ? pixel(shoulderSample.point, width, height) : null;
+      const elbow = elbowSample.point ? pixel(elbowSample.point, width, height) : null;
+      const wrist = wristSample.point ? pixel(wristSample.point, width, height) : null;
+      const hip = hipSample.point ? pixel(hipSample.point, width, height) : null;
+      if (shoulder && hip) {
+        drawLine(ctx, hip, shoulder, "rgba(244,241,232,.45)", 3);
+      }
+      if (shoulder && elbow) {
+        drawLine(ctx, shoulder, elbow, "#f4b95f", 6);
+      }
+      if (elbow && wrist) {
+        drawLine(ctx, elbow, wrist, "#56d8a7", 6);
+      }
+      if (shoulder) drawPoint(ctx, shoulder, "#f4b95f");
+      if (elbow) drawPoint(ctx, elbow, "#56d8a7");
+      if (wrist) drawPoint(ctx, wrist, "#ff7464");
 
-      ctx.beginPath();
-      ctx.strokeStyle = "#56d8a7";
-      ctx.lineWidth = 5;
-      ctx.arc(shoulder.x, shoulder.y, 82, -Math.PI / 2 - 0.15, -Math.PI / 2 + 0.15);
-      ctx.stroke();
+      if (packet.angle_valid && shoulder) {
+        ctx.beginPath();
+        ctx.strokeStyle = "#56d8a7";
+        ctx.lineWidth = 5;
+        ctx.arc(shoulder.x, shoulder.y, 82, -Math.PI / 2 - 0.15, -Math.PI / 2 + 0.15);
+        ctx.stroke();
+      }
+    }
+
+    if (!packet.angle_valid) {
+      ctx.fillStyle = "rgba(100,116,255,.88)";
+      ctx.fillRect(12, height - 68, 430, 44);
+      ctx.fillStyle = "#f4f1e8";
+      ctx.font = "800 18px Segoe UI";
+      ctx.fillText("Move your full arm into view.", 28, height - 40);
     }
     ctx.restore();
   }
@@ -386,6 +510,22 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
   async function postLatestPacket(packet) {
     latestPacketRef.current = packet;
     onPacket?.(packet);
+    if (debugModeRef.current) {
+      console.log("Physio analysis debug", {
+        shoulder: packet._debug_landmarks?.shoulder || null,
+        elbow: packet._debug_landmarks?.elbow || null,
+        wrist: packet._debug_landmarks?.wrist || null,
+        hip_present: packet.hip_present,
+        landmark_confidence: packet.landmark_confidence,
+        angle_valid: packet.angle_valid,
+        angle_rejection_reason: packet.angle_rejection_reason,
+        shoulder_angle: packet.shoulder_angle,
+        elbow_angle: packet.elbow_angle,
+        rep_phase: packet.rep_phase,
+        rep_count: packet.rep_count,
+        coach_state: packet.coach_state
+      });
+    }
     try {
       await postPacket(packet);
     } catch {
@@ -437,7 +577,7 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
     <div className="camera-stage browser-camera-stage">
       <video ref={videoRef} playsInline muted className="browser-video-source" />
       <canvas ref={canvasRef} className="browser-overlay-canvas" />
-      <span className="camera-badge"><Video size={15} /> Browser webcam overlay</span>
+      <span className="camera-badge"><Video size={15} /> Live Webcam Analysis</span>
       {cameraState !== "ready" && (
         <div className="camera-permission">
           <Camera size={34} />
@@ -451,7 +591,12 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket }) {
         </div>
       )}
       {cameraState === "ready" && (
-        <button type="button" className="camera-stop" onClick={stopCamera}>Stop camera</button>
+        <div className="camera-actions">
+          <button type="button" className="camera-debug" onClick={() => setDebugMode((value) => !value)}>
+            {debugMode ? "Analysis debug on" : "Analysis debug"}
+          </button>
+          <button type="button" className="camera-stop" onClick={stopCamera}>Stop camera</button>
+        </div>
       )}
     </div>
   );

@@ -6,7 +6,14 @@ async function request(path, options = {}) {
     ...options
   });
   if (!response.ok) {
-    throw new Error(`${options.method || "GET"} ${path} failed: ${response.status}`);
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = payload.detail || "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `${options.method || "GET"} ${path} failed: ${response.status}`);
   }
   return response.json();
 }
@@ -22,7 +29,7 @@ export function startSession(payload) {
   });
 }
 
-export function getLatestPacket(source = "auto") {
+export function getLatestPacket(source = "python") {
   return request(`/api/live/latest?source=${encodeURIComponent(source)}`);
 }
 

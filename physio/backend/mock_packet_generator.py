@@ -52,6 +52,7 @@ class MockPacketGenerator:
             range_status = "too_low"
 
         packet = PhysioPacket(
+            source="mock",
             session_id=session_id,
             timestamp_ms=int(time.time() * 1000),
             exercise="right_arm_raise",

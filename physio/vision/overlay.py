@@ -14,13 +14,19 @@ STATE_COLORS = {
 
 
 def format_overlay_lines(packet: dict, fps: float = 0.0, data_status: str = "real") -> list[str]:
+    shoulder = packet.get("shoulder_angle")
+    elbow = packet.get("elbow_angle")
+    shoulder_text = "--" if shoulder is None else f"{shoulder:.1f}"
+    elbow_text = "--" if elbow is None else f"{elbow:.1f}"
+    score = packet.get("physio_score")
+    score_text = "--" if score is None else str(score)
     return [
         f"Physio | {data_status.upper()} | FPS {fps:.1f}",
-        f"Shoulder: {packet.get('shoulder_angle', 0):.1f} deg",
-        f"Elbow: {packet.get('elbow_angle', 0):.1f} deg",
+        f"Shoulder: {shoulder_text} deg",
+        f"Elbow: {elbow_text} deg",
         f"Target: {packet.get('target_angle', 90):.1f} deg",
         f"Rep: {packet.get('rep_count', 0)} / Phase: {packet.get('rep_phase', 'idle')}",
-        f"Score: {packet.get('physio_score', 0)} | State: {packet.get('coach_state', 'unknown')}",
+        f"Score: {score_text} | State: {packet.get('coach_state', 'unknown')}",
         f"Pace: {packet.get('pace', 'unknown')} | Jitter: {packet.get('opencv_jitter_score', 0):.2f}",
         packet.get("local_coach_message", "")
     ]

@@ -10,7 +10,7 @@ COACH_MESSAGES = {
     "too_fast": "Slow down and control the movement.",
     "too_jittery": "Keep your arm steady and move smoothly.",
     "hold_longer": "Hold at the top for one more second.",
-    "low_confidence": "Adjust your position so I can see your arm.",
+    "low_confidence": "Move your full arm into view.",
     "rest_needed": "Take a short rest before the next rep.",
     "session_complete": "Session complete. Nice steady work.",
     "error": "Something went wrong. Check the sensor or camera."

@@ -12,7 +12,9 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def calculate_physio_score(packet: PhysioPacket) -> int:
+def calculate_physio_score(packet: PhysioPacket) -> int | None:
+    if packet.shoulder_angle is None or packet.elbow_angle is None or packet.camera_status != "ok":
+        return None
     target = max(packet.target_angle, 1)
     range_score = min(packet.shoulder_angle / target, 1.0) * 35
     smoothness_score = (1 - clamp(packet.combined_jitter_score, 0, 1)) * 25
@@ -34,9 +36,14 @@ def calculate_physio_score(packet: PhysioPacket) -> int:
 
 
 def choose_coach_state(packet: PhysioPacket) -> str:
-    if packet.camera_status != "ok" or packet.sensor_status == "error":
+    if packet.sensor_status == "error":
         return "error"
-    if packet.landmark_confidence < 0.6:
+    if (
+        packet.camera_status != "ok"
+        or packet.shoulder_angle is None
+        or packet.elbow_angle is None
+        or packet.landmark_confidence < 0.45
+    ):
         return "low_confidence"
     if packet.combined_jitter_score > 0.65:
         return "too_jittery"
@@ -63,7 +70,8 @@ def apply_local_rules(packet: PhysioPacket) -> PhysioPacket:
         "coach_state": coach_state,
         "local_coach_message": COACH_MESSAGES[coach_state],
     })
-    return provisional.model_copy(update={"physio_score": calculate_physio_score(provisional)})
+    score = calculate_physio_score(provisional)
+    return provisional.model_copy(update={"physio_score": score})
 
 
 def merge_packets(

@@ -11,7 +11,9 @@ builds the shared structure for Person B and Person C to implement on:
 
 The core app works with no hardware and no external API keys.
 
-## Run Backend
+## Canonical Python OpenCV Demo Path
+
+Terminal 1:
 
 ```powershell
 cd physio\backend
@@ -19,13 +21,7 @@ python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check:
-
-```powershell
-curl http://localhost:8000/api/health
-```
-
-## Run Frontend
+Terminal 2:
 
 ```powershell
 cd physio\frontend
@@ -42,10 +38,56 @@ http://localhost:5173
 If another local app is already using `5173`, Vite will print the next
 available port, such as `http://localhost:5174`.
 
+Terminal 3:
+
+```powershell
+cd physio
+python vision\pose_tracker.py
+```
+
+Open the frontend. If the Python tracker is already posting recent packets, the
+dashboard selects `Python OpenCV`. The large left panel displays the Python
+overlay from `GET /api/vision/frame`, and metric cards read
+`GET /api/live/latest?source=python`.
+
+Health check:
+
+```powershell
+curl http://localhost:8000/api/health
+curl http://localhost:8000/api/live/source
+```
+
+## Browser Camera Fallback
+
+1. Start the backend and frontend.
+2. Open the dashboard.
+3. Select `Browser Camera Fallback`.
+4. Click `Enable webcam` in the large left panel.
+5. Approve the browser camera prompt.
+
+The tab uses browser MediaPipe to draw live video, tracked shoulder/elbow/wrist
+points, hand landmarks, skeleton lines, and coaching telemetry directly on the
+canvas. It also posts the calculated Final Physio packets to `POST /api/packets`
+so the backend, coach panel, session summary, and history all consume real
+camera-derived data.
+
+## Mock Demo Mode
+
+Select `Mock Demo` in the dashboard. Mock packets are generated only for this
+explicit mode through:
+
+```powershell
+curl http://localhost:8000/api/live/latest?source=mock
+```
+
+Mock mode is labeled in the UI and should not be used as evidence of real
+movement tracking.
+
 ## Run Fake Sensor
 
 The backend mock packets do not require this server, but Person A can use it as
-the sensor contract reference.
+the sensor contract reference. Python OpenCV packets display sensor data as real
+only when `distance_cm` is present and `sensor_status` is `ok`.
 
 ```powershell
 cd physio\hardware
@@ -58,32 +100,11 @@ Test:
 curl http://localhost:8010/sensor/latest
 ```
 
-## Run Real Webcam Tracking In The Dashboard
-
-1. Start the backend and frontend.
-2. Open the dashboard.
-3. Click `Real`.
-4. Click `Enable webcam` in the large left panel.
-5. Approve the browser camera prompt.
-
-The tab uses browser MediaPipe to draw live video, tracked shoulder/elbow/wrist
-points, hand landmarks, skeleton lines, and coaching telemetry directly on the
-canvas. It also posts the calculated Final Physio packets to `POST /api/packets`
-so the backend, coach panel, session summary, and history all consume real
-camera-derived data.
-
-## Optional Python OpenCV Tracking
-
-Install the vision dependencies:
+## Python Tracker Options
 
 ```powershell
 cd physio
 python -m pip install -r backend\requirements.txt
-```
-
-Run the tracker:
-
-```powershell
 python vision\pose_tracker.py
 ```
 
@@ -103,14 +124,19 @@ python vision\pose_tracker.py --no-sensor
 python vision\pose_tracker.py --process-every 2
 ```
 
-In the dashboard, use the Mock/Real segmented control:
+In the dashboard, use the source segmented control:
 
-- Mock: hardcoded generated packets from the backend.
-- Real: browser webcam tracking inside the tab. The Python tracker can also
-  post packets and overlay frames if you run it separately.
+- Python OpenCV: canonical real demo source from `vision/pose_tracker.py`.
+- Browser Camera Fallback: in-tab MediaPipe fallback, no hardware sensor.
+- Mock Demo: generated packets only.
 
-Real mode shows `opencv-waiting` until browser or Python tracking posts its
-first packet.
+Python mode shows:
+
+```text
+Python OpenCV tracker not connected. Start python vision/pose_tracker.py or switch to Browser Camera Fallback.
+```
+
+until recent Python packets are available.
 
 ## Mock Live Session Test
 
@@ -124,13 +150,26 @@ first packet.
 Backend curl examples:
 
 ```powershell
-curl http://localhost:8000/api/live/latest
+curl http://localhost:8000/api/live/latest?source=mock
 curl -X POST http://localhost:8000/api/session/start -H "Content-Type: application/json" -d "{\"user_id\":\"demo-user\",\"exercise\":\"right_arm_raise\",\"side\":\"right\",\"target_angle\":90}"
 curl -X POST http://localhost:8000/api/session/end -H "Content-Type: application/json" -d "{\"session_id\":\"mock-session\",\"pain_level\":2,\"fatigue_level\":4}"
 curl http://localhost:8000/api/sessions
 ```
 
 For `/api/coach/cue`, POST a full `PhysioPacket` from `/api/live/latest`.
+
+## Verification Checklist
+
+1. Open the frontend.
+2. Confirm source auto-selects `Python OpenCV` if `python vision\pose_tracker.py` is running.
+3. Confirm the main panel shows the Python overlay frame, not BrowserPoseOverlay.
+4. Raise your arm and confirm shoulder angle changes.
+5. Confirm rep count changes after raise-and-lower cycles.
+6. Confirm PhysioScore changes with range, pace, jitter, hold, and confidence.
+7. Stop `pose_tracker.py` and confirm the UI shows tracker offline instead of fake real data.
+8. Switch to `Browser Camera Fallback` and confirm the browser overlay asks for webcam permission and works after approval.
+9. Switch to `Mock Demo` and confirm mock mode is clearly labeled.
+10. Confirm dashboard labels mock/demo history separately from saved real sessions.
 
 ## Person B Implemented Files
 

@@ -11,6 +11,9 @@ class MotionQualityTracker:
     too_slow_deg_per_sec: float = 8.0
     samples: deque[tuple[float, float]] = field(default_factory=deque)
 
+    def reset(self) -> None:
+        self.samples.clear()
+
     def update(self, timestamp_sec: float, shoulder_angle: float) -> dict:
         self.samples.append((timestamp_sec, shoulder_angle))
         while len(self.samples) > self.max_samples:

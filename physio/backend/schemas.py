@@ -23,6 +23,7 @@ CoachState = Literal[
     "session_complete",
     "error"
 ]
+PacketSource = Literal["python_opencv", "browser_mediapipe", "mock"]
 
 
 class SensorPacket(BaseModel):
@@ -47,8 +48,8 @@ class PosePacket(BaseModel):
     landmark_confidence: float = Field(ge=0, le=1)
     exercise: str = "right_arm_raise"
     side: Side = "right"
-    shoulder_angle: float
-    elbow_angle: float
+    shoulder_angle: float | None
+    elbow_angle: float | None
     wrist_height_relative: float
     opencv_jitter_score: float = Field(ge=0, le=1)
     rep_count: int = Field(ge=0)
@@ -60,6 +61,7 @@ class PosePacket(BaseModel):
 
 
 class PhysioPacket(BaseModel):
+    source: PacketSource = "mock"
     session_id: str
     timestamp_ms: int
     exercise: str = "right_arm_raise"
@@ -72,8 +74,8 @@ class PhysioPacket(BaseModel):
     opencv_jitter_score: float = Field(ge=0, le=1)
     combined_jitter_score: float = Field(ge=0, le=1)
     jitter_detected: bool
-    shoulder_angle: float
-    elbow_angle: float
+    shoulder_angle: float | None
+    elbow_angle: float | None
     target_angle: float
     landmark_confidence: float = Field(ge=0, le=1)
     rep_count: int = Field(ge=0)
@@ -82,12 +84,24 @@ class PhysioPacket(BaseModel):
     pace: Pace
     range_status: RangeStatus
     compensation: Compensation
-    physio_score: int = Field(ge=0, le=100)
+    physio_score: int | None = Field(default=None, ge=0, le=100)
     coach_state: CoachState
     local_coach_message: str
     ai_coach_message: str | None = None
     avatar_status: str = "idle"
     voice_status: str = "idle"
+    pose_detected: bool | None = None
+    shoulder_present: bool | None = None
+    elbow_present: bool | None = None
+    wrist_present: bool | None = None
+    hip_present: bool | None = None
+    angle_valid: bool | None = None
+    using_torso_reference: bool | None = None
+    using_screen_axis_fallback: bool | None = None
+    shoulder_coords: dict[str, float] | None = None
+    elbow_coords: dict[str, float] | None = None
+    wrist_coords: dict[str, float] | None = None
+    angle_rejection_reason: str | None = None
 
 
 class SessionStartRequest(BaseModel):

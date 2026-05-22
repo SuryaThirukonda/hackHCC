@@ -6,14 +6,16 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def calculate_physio_score(
-    shoulder_angle: float,
+    shoulder_angle: float | None,
     target_angle: float,
     combined_jitter_score: float,
     pace: str,
     hold_time_sec: float,
     landmark_confidence: float,
     compensation: str = "none",
-) -> int:
+) -> int | None:
+    if shoulder_angle is None:
+        return None
     range_score = min(shoulder_angle / max(target_angle, 1), 1.0) * 35
     smoothness_score = (1 - clamp(combined_jitter_score, 0, 1)) * 25
     pace_score = {"good": 15, "too_slow": 8, "too_fast": 5, "unknown": 8}.get(pace, 8)
@@ -29,14 +31,16 @@ COACH_MESSAGES = {
     "too_fast": "Slow down and control the movement.",
     "too_jittery": "Keep your arm steady and move smoothly.",
     "hold_longer": "Hold at the top for one more second.",
-    "low_confidence": "Adjust your position so I can see your arm.",
+    "low_confidence": "Move your full arm into view.",
     "rest_needed": "Take a short rest before the next rep.",
     "session_complete": "Session complete. Nice steady work.",
     "error": "Something went wrong. Check the sensor or camera."
 }
 
 
-def range_status_for_angle(shoulder_angle: float, target_angle: float) -> str:
+def range_status_for_angle(shoulder_angle: float | None, target_angle: float) -> str:
+    if shoulder_angle is None:
+        return "unknown"
     if shoulder_angle >= target_angle + 10:
         return "overextended"
     if shoulder_angle >= target_angle:
@@ -60,8 +64,8 @@ def choose_coach_state(
     target_reps: int = 8,
 ) -> str:
     if camera_status != "ok":
-        return "error"
-    if landmark_confidence < 0.6:
+        return "low_confidence"
+    if landmark_confidence < 0.45:
         return "low_confidence"
     if combined_jitter_score > 0.65:
         return "too_jittery"
