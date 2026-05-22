@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
-from coach.avatar_provider import get_avatar_provider
-from coach.gemini_coach import GeminiCoachProvider
-from coach.mock_coach import MockCoachProvider
-from coach.voice_provider import get_voice_provider
+from coach.coach_orchestrator import CoachOrchestrator
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
 from schemas import (
@@ -23,7 +22,7 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
-from session_store import LocalSessionStore
+from storage_provider import get_session_store
 
 
 app = FastAPI(title="Physio Backend", version="0.1.0")
@@ -35,6 +34,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+AUDIO_DIR = Path(__file__).parent / "data" / "audio"
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 
 
 @dataclass
@@ -57,15 +59,9 @@ class SessionState:
 
 state = SessionState()
 mock_generator = MockPacketGenerator()
-store = LocalSessionStore()
+coach_orchestrator = CoachOrchestrator()
+store = get_session_store()
 websockets: set[WebSocket] = set()
-
-
-def get_coach_provider():
-    provider = os.getenv("COACH_PROVIDER", "mock").lower()
-    if provider == "gemini":
-        return GeminiCoachProvider()
-    return MockCoachProvider()
 
 
 def waiting_for_real_packet() -> PhysioPacket:
@@ -153,6 +149,7 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.latest_frame = None
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
+    coach_orchestrator.reset_session(session_id)
     return SessionStartResponse(session_id=session_id, status="started")
 
 
@@ -221,21 +218,7 @@ def latest_vision_frame() -> Response:
 @app.post("/api/coach/cue", response_model=CoachCueResponse)
 def coach_cue(packet: PhysioPacket) -> CoachCueResponse:
     normalized = apply_local_rules(packet)
-    cue = get_coach_provider().generate_cue(normalized)
-    voice_result = get_voice_provider().synthesize(cue.message)
-    avatar_result = get_avatar_provider().speak(cue.message, voice_result.local_file_path)
-    return CoachCueResponse(
-        coach_state=normalized.coach_state,
-        message=cue.message,
-        source=cue.source,
-        voice_status=voice_result.status,
-        avatar_status=avatar_result.status,
-        should_speak=True,
-        reason="mock_session_tick",
-        audio_url=voice_result.audio_url,
-        local_file_path=voice_result.local_file_path,
-        avatar_url=avatar_result.avatar_url,
-    )
+    return coach_orchestrator.cue_for_packet(normalized)
 
 
 @app.post("/api/session/end", response_model=SessionSummary)
@@ -256,7 +239,7 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
     max_jitter = max(packet.combined_jitter_score for packet in packets)
     average_jitter = sum(packet.combined_jitter_score for packet in packets) / len(packets)
 
-    summary = SessionSummary(
+    fallback_summary = SessionSummary(
         session_id=request.session_id,
         user_id=state.user_id,
         exercise=state.exercise,
@@ -276,6 +259,7 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         summary_text=f"User completed {total_reps} reps with a best angle of {best_angle:.1f} degrees.",
         recommendation_text="Repeat this target next session and focus on smooth lowering.",
     )
+    summary = coach_orchestrator.summarize_session(packets, fallback_summary)
     store.save_summary(summary)
     return summary
 
@@ -296,3 +280,26 @@ async def live_stream(websocket: WebSocket) -> None:
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         websockets.discard(websocket)
+
+
+@app.websocket("/ws/coach")
+async def coach_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            try:
+                packet = PhysioPacket(**payload)
+            except ValidationError as exc:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid PhysioPacket",
+                    "details": exc.errors(),
+                })
+                continue
+
+            normalized = apply_local_rules(packet)
+            cue = coach_orchestrator.cue_for_packet(normalized)
+            await websocket.send_json(cue.model_dump())
+    except WebSocketDisconnect:
+        return

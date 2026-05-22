@@ -159,20 +159,24 @@ Person B prompt coverage:
 - B-11: dashboard real/mock mode and live packet display.
 - B-12: session summary/history and progress cards.
 
-## Person C Next Files
+## Person C AI Communication Layer
 
-Person C should work primarily in:
+Person C is implemented in:
 
 - `backend/coach/base.py`
 - `backend/coach/mock_coach.py`
 - `backend/coach/gemini_coach.py`
 - `backend/coach/voice_provider.py`
 - `backend/coach/avatar_provider.py`
+- `backend/coach/coach_orchestrator.py`
+- `backend/storage_provider.py`
+- `backend/sqLite_store.py`
 - `backend/main.py`
 - `frontend/src/components/CoachPanel.jsx`
 
 The mock providers are intentionally non-blocking. Real Gemini, ElevenLabs,
-HeyGen, and Firestore integrations should keep the same fallback behavior.
+HeyGen, and SQLite are enabled by environment variables and keep the same
+fallback behavior. See `PERSON_C_README.md` for curl tests and provider flags.
 
 ## Contracts
 

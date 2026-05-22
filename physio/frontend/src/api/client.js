@@ -48,6 +48,14 @@ export function getCoachCue(packet) {
   });
 }
 
+export function getCoachWebSocketUrl() {
+  const url = new URL(API_BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/ws/coach";
+  url.search = "";
+  return url.toString();
+}
+
 export function endSession(payload) {
   return request("/api/session/end", {
     method: "POST",

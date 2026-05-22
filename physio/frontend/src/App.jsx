@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Database, Pause, Play, Power, Square, Video } from "lucide-react";
 import {
   endSession,
@@ -6,6 +6,7 @@ import {
   getHealth,
   getLatestPacket,
   getLiveSource,
+  getCoachWebSocketUrl,
   getSessions,
   startSession
 } from "./api/client.js";
@@ -28,12 +29,43 @@ export default function App() {
   const [sourceStatus, setSourceStatus] = useState(null);
   const [health, setHealth] = useState("checking");
   const [error, setError] = useState("");
+  const coachSocketRef = useRef(null);
 
   useEffect(() => {
     getHealth()
       .then((data) => setHealth(data.status))
       .catch(() => setHealth("offline"));
     refreshSessions();
+  }, []);
+
+  useEffect(() => {
+    if (!live) return undefined;
+    const socket = new WebSocket(getCoachWebSocketUrl());
+    coachSocketRef.current = socket;
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type !== "error") setCue(data);
+    };
+    socket.onclose = () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+    };
+    socket.onerror = () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+    };
+    return () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+      socket.close();
+    };
+  }, [live]);
+
+  const requestCoachCue = useCallback(async (nextPacket) => {
+    const socket = coachSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(nextPacket));
+      return;
+    }
+    const nextCue = await getCoachCue(nextPacket);
+    setCue(nextCue);
   }, []);
 
   useEffect(() => {
@@ -52,8 +84,7 @@ export default function App() {
           setCue(null);
           return;
         }
-        const nextCue = await getCoachCue(nextPacket);
-        if (!cancelled) setCue(nextCue);
+        await requestCoachCue(nextPacket);
       } catch (err) {
         if (!cancelled) setError(err.message);
       }
@@ -64,19 +95,18 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [live, dataSource]);
+  }, [live, dataSource, requestCoachCue]);
 
   const sessionLabel = useMemo(() => sessionId || packet?.session_id || "mock-session", [packet, sessionId]);
   const handleBrowserPacket = useCallback(async (nextPacket) => {
     setPacket(nextPacket);
     setError("");
     try {
-      const nextCue = await getCoachCue(nextPacket);
-      setCue(nextCue);
+      await requestCoachCue(nextPacket);
     } catch {
       setCue(null);
     }
-  }, []);
+  }, [requestCoachCue]);
 
   async function refreshSessions() {
     try {
