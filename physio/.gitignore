@@ -5,3 +5,4 @@ node_modules/
 dist/
 backend/data/sessions/*.json
 !backend/data/sessions/.gitkeep
+backend/data/audio/

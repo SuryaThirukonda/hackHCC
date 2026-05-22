@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Database, Pause, Play, Power, Square, Video } from "lucide-react";
+=======
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Activity,
@@ -14,12 +18,14 @@ import {
   Square,
   Video
 } from "lucide-react";
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 import {
   endSession,
   getCoachCue,
   getHealth,
   getLatestPacket,
   getLiveSource,
+  getCoachWebSocketUrl,
   getSessions,
   startSession
 } from "./api/client.js";
@@ -71,12 +77,16 @@ export default function App() {
   const [frameTick, setFrameTick] = useState(Date.now());
   const [health, setHealth] = useState("checking");
   const [error, setError] = useState("");
+<<<<<<< HEAD
+  const coachSocketRef = useRef(null);
+=======
   const [runner, dispatchRunner] = useReducer(
     exerciseRunnerReducer,
     createInitialExerciseRunnerState(defaultExercise)
   );
   const [countdownValue, setCountdownValue] = useState(null);
   const sessionStartTokenRef = useRef(0);
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
   useEffect(() => {
     getHealth()
@@ -89,6 +99,39 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+<<<<<<< HEAD
+    if (!live) return undefined;
+    const socket = new WebSocket(getCoachWebSocketUrl());
+    coachSocketRef.current = socket;
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type !== "error") setCue(data);
+    };
+    socket.onclose = () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+    };
+    socket.onerror = () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+    };
+    return () => {
+      if (coachSocketRef.current === socket) coachSocketRef.current = null;
+      socket.close();
+    };
+  }, [live]);
+
+  const requestCoachCue = useCallback(async (nextPacket) => {
+    const socket = coachSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(nextPacket));
+      return;
+    }
+    const nextCue = await getCoachCue(nextPacket);
+    setCue(nextCue);
+  }, []);
+
+  useEffect(() => {
+    if (!live) return undefined;
+=======
     const id = window.setInterval(() => {
       getLiveSource()
         .then((status) => {
@@ -108,6 +151,7 @@ export default function App() {
 
   useEffect(() => {
     if (!live || sourceMode === "browser") return undefined;
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
     let cancelled = false;
 
     const tick = async () => {
@@ -116,9 +160,20 @@ export default function App() {
         if (cancelled) return;
         setPacket(nextPacket);
         setError("");
+<<<<<<< HEAD
+        getLiveSource().then((status) => {
+          if (!cancelled) setSourceStatus(status);
+        }).catch(() => {});
+        if (nextPacket.device_id === "opencv-waiting") {
+          setCue(null);
+          return;
+        }
+        await requestCoachCue(nextPacket);
+=======
         if (sourceMode === "python") setFrameTick(Date.now());
         const nextCue = await getCoachCue(nextPacket);
         if (!cancelled) setCue(nextCue);
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
       } catch (err) {
         if (!cancelled) {
           const expectedPythonOffline =
@@ -136,6 +191,9 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
+<<<<<<< HEAD
+  }, [live, dataSource, requestCoachCue]);
+=======
   }, [live, sourceMode]);
 
   const sessionLabel = useMemo(() => sessionId || packet?.session_id || "local-webcam-session", [packet, sessionId]);
@@ -162,6 +220,7 @@ export default function App() {
 
     return () => window.clearInterval(id);
   }, [runner.status]);
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
   const handleBrowserPacket = useCallback(async (nextPacket) => {
     if (sourceMode !== "browser") return;
@@ -176,12 +235,15 @@ export default function App() {
       });
     }
     try {
-      const nextCue = await getCoachCue(nextPacket);
-      setCue(nextCue);
+      await requestCoachCue(nextPacket);
     } catch {
       setCue(null);
     }
+<<<<<<< HEAD
+  }, [requestCoachCue]);
+=======
   }, [runner.status, sourceMode]);
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
   async function refreshSessions() {
     try {

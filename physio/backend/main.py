@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
-from coach.avatar_provider import get_avatar_provider
-from coach.gemini_coach import GeminiCoachProvider
-from coach.mock_coach import MockCoachProvider
-from coach.voice_provider import get_voice_provider
+from coach.coach_orchestrator import CoachOrchestrator
+from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
 from schemas import (
@@ -23,9 +23,14 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
+<<<<<<< HEAD
+from storage_provider import get_session_store
+=======
 from sqlite_store import SQLitePhysioStore
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
 
+load_env_file()
 app = FastAPI(title="Physio Backend", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +40,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+AUDIO_DIR = Path(__file__).parent / "data" / "audio"
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 
 
 @dataclass
@@ -61,6 +69,43 @@ class SessionState:
 
 state = SessionState()
 mock_generator = MockPacketGenerator()
+<<<<<<< HEAD
+coach_orchestrator = CoachOrchestrator()
+store = get_session_store()
+websockets: set[WebSocket] = set()
+
+
+def waiting_for_real_packet() -> PhysioPacket:
+    return PhysioPacket(
+        session_id=state.session_id,
+        timestamp_ms=int(time.time() * 1000),
+        exercise=state.exercise,
+        side=state.side,
+        device_id="opencv-waiting",
+        sensor_status="offline",
+        camera_status="warning",
+        distance_cm=None,
+        sensor_jitter_score=0,
+        opencv_jitter_score=0,
+        combined_jitter_score=0,
+        jitter_detected=False,
+        shoulder_angle=0,
+        elbow_angle=0,
+        target_angle=state.target_angle,
+        landmark_confidence=0,
+        rep_count=0,
+        rep_phase="idle",
+        hold_time_sec=0,
+        pace="unknown",
+        range_status="unknown",
+        compensation="unknown",
+        physio_score=0,
+        coach_state="low_confidence",
+        local_coach_message="Waiting for OpenCV packets from pose_tracker.py.",
+        avatar_status="idle",
+        voice_status="idle",
+    )
+=======
 store = SQLitePhysioStore()
 websockets: set[WebSocket] = set()
 
@@ -74,6 +119,7 @@ def get_coach_provider():
 
 SOURCE_RECENT_WINDOW_SEC = 2.5
 FRAME_RECENT_WINDOW_SEC = 3.0
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
 
 def source_age_ms(source: str) -> int:
@@ -147,6 +193,22 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "physio-backend"}
 
 
+@app.get("/api/coach/provider-status")
+def coach_provider_status() -> dict[str, Any]:
+    return {
+        "providers": coach_orchestrator.provider_status(),
+        "env": {
+            "gemini_key_configured": configured_secret("GEMINI_API_KEY"),
+            "elevenlabs_key_configured": configured_secret("ELEVENLABS_API_KEY"),
+            "elevenlabs_voice_configured": configured_secret("ELEVENLABS_VOICE_ID"),
+            "heygen_key_configured": configured_secret("HEYGEN_API_KEY"),
+            "heygen_avatar_configured": configured_secret("HEYGEN_AVATAR_ID"),
+            "heygen_voice_configured": configured_secret("HEYGEN_VOICE_ID"),
+            "public_base_url_configured": public_base_url() is not None,
+        },
+    }
+
+
 @app.post("/api/session/start", response_model=SessionStartResponse)
 def start_session(request: SessionStartRequest) -> SessionStartResponse:
     session_id = f"session-{int(time.time() * 1000)}"
@@ -169,6 +231,9 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.latest_frame = None
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
+<<<<<<< HEAD
+    coach_orchestrator.reset_session(session_id)
+=======
     store.save_session_start(
         session_id=session_id,
         user_id=state.user_id,
@@ -177,6 +242,7 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
         target_angle=state.target_angle,
         started_at_ms=state.started_at_ms,
     )
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
     return SessionStartResponse(session_id=session_id, status="started")
 
 
@@ -265,21 +331,7 @@ def latest_vision_frame() -> Response:
 @app.post("/api/coach/cue", response_model=CoachCueResponse)
 def coach_cue(packet: PhysioPacket) -> CoachCueResponse:
     normalized = apply_local_rules(packet)
-    cue = get_coach_provider().generate_cue(normalized)
-    voice_result = get_voice_provider().synthesize(cue.message)
-    avatar_result = get_avatar_provider().speak(cue.message, voice_result.local_file_path)
-    return CoachCueResponse(
-        coach_state=normalized.coach_state,
-        message=cue.message,
-        source=cue.source,
-        voice_status=voice_result.status,
-        avatar_status=avatar_result.status,
-        should_speak=True,
-        reason="mock_session_tick",
-        audio_url=voice_result.audio_url,
-        local_file_path=voice_result.local_file_path,
-        avatar_url=avatar_result.avatar_url,
-    )
+    return coach_orchestrator.cue_for_packet(normalized)
 
 
 @app.post("/api/session/end", response_model=SessionSummary)
@@ -309,7 +361,7 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
     max_jitter = max(packet.combined_jitter_score for packet in packets)
     average_jitter = sum(packet.combined_jitter_score for packet in packets) / len(packets)
 
-    summary = SessionSummary(
+    fallback_summary = SessionSummary(
         session_id=request.session_id,
         user_id=state.user_id,
         exercise=state.exercise,
@@ -329,6 +381,7 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         summary_text=f"User completed {total_reps} reps with {summary_angle_label} of {best_angle:.1f} degrees.",
         recommendation_text="Focus on a controlled bend, brief hold, and smooth straighten phase.",
     )
+    summary = coach_orchestrator.summarize_session(packets, fallback_summary)
     store.save_summary(summary)
     return summary
 
@@ -358,3 +411,26 @@ async def live_stream(websocket: WebSocket) -> None:
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         websockets.discard(websocket)
+
+
+@app.websocket("/ws/coach")
+async def coach_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            try:
+                packet = PhysioPacket(**payload)
+            except ValidationError as exc:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid PhysioPacket",
+                    "details": exc.errors(),
+                })
+                continue
+
+            normalized = apply_local_rules(packet)
+            cue = coach_orchestrator.cue_for_packet(normalized)
+            await websocket.send_json(cue.model_dump())
+    except WebSocketDisconnect:
+        return

@@ -158,3 +158,5 @@ class CoachCueResponse(BaseModel):
     audio_url: str | None = None
     local_file_path: str | None = None
     avatar_url: str | None = None
+    avatar_session_id: str | None = None
+    provider_error: str | None = None
