@@ -42,6 +42,8 @@ POSE_LANDMARKS = {
     "right": {"shoulder": 12, "elbow": 14, "wrist": 16, "hip": 24},
     "left": {"shoulder": 11, "elbow": 13, "wrist": 15, "hip": 23},
 }
+MIN_LANDMARK_CONFIDENCE = 0.45
+MIN_PRESENT_SCORE = 0.45
 
 
 class PoseTracker:
@@ -85,22 +87,34 @@ class PoseTracker:
 
     def build_packet(
         self,
-        shoulder_angle_value: float,
-        elbow_angle_value: float,
+        shoulder_angle_value: float | None,
+        elbow_angle_value: float | None,
         wrist_height_relative: float,
         landmark_confidence: float,
         hand_detected: bool,
         camera_status: str,
+        pose_detected: bool = False,
+        shoulder_present: bool = False,
+        elbow_present: bool = False,
+        wrist_present: bool = False,
+        hip_present: bool = False,
     ) -> dict:
         now = time.time()
-        quality = self.motion.update(now, shoulder_angle_value)
-        rep_phase = self.rep_counter.update(shoulder_angle_value) if camera_status == "ok" else "idle"
-        hold_time_sec = self.rep_counter.hold_time_sec if camera_status == "ok" else 0.0
-        range_status = range_status_for_angle(shoulder_angle_value, self.target_angle) if camera_status == "ok" else "unknown"
-        compensation = "none" if hand_detected and landmark_confidence >= 0.6 else "low_confidence"
+        angle_valid = camera_status == "ok" and shoulder_angle_value is not None and elbow_angle_value is not None
+        if angle_valid:
+            quality = self.motion.update(now, shoulder_angle_value)
+            rep_phase = self.rep_counter.update(shoulder_angle_value)
+        else:
+            self.motion.reset()
+            self.rep_counter.invalidate()
+            quality = {"angular_velocity": 0.0, "opencv_jitter_score": 0.0, "pace": "unknown"}
+            rep_phase = "idle"
+        hold_time_sec = self.rep_counter.hold_time_sec if angle_valid else 0.0
+        range_status = range_status_for_angle(shoulder_angle_value, self.target_angle) if angle_valid else "unknown"
+        compensation = "none" if angle_valid else "low_confidence"
         sensor = self.sensor_packet()
         sensor_jitter_score = float(sensor.get("sensor_jitter_score") or 0)
-        combined_jitter_score = round((sensor_jitter_score + quality["opencv_jitter_score"]) / 2, 3)
+        combined_jitter_score = round((sensor_jitter_score + quality["opencv_jitter_score"]) / 2, 3) if angle_valid else 0.0
         score = calculate_physio_score(
             shoulder_angle=shoulder_angle_value,
             target_angle=self.target_angle,
@@ -123,6 +137,7 @@ class PoseTracker:
         )
 
         return {
+            "source": "python_opencv",
             "session_id": self.get_backend_session_id(),
             "timestamp_ms": int(now * 1000),
             "exercise": "right_arm_raise",
@@ -134,9 +149,9 @@ class PoseTracker:
             "sensor_jitter_score": sensor_jitter_score,
             "opencv_jitter_score": quality["opencv_jitter_score"],
             "combined_jitter_score": combined_jitter_score,
-            "jitter_detected": bool(sensor.get("sensor_jitter_detected", False)) or combined_jitter_score > 0.65,
-            "shoulder_angle": round(shoulder_angle_value, 1),
-            "elbow_angle": round(elbow_angle_value, 1),
+            "jitter_detected": angle_valid and (bool(sensor.get("sensor_jitter_detected", False)) or combined_jitter_score > 0.65),
+            "shoulder_angle": round(shoulder_angle_value, 1) if shoulder_angle_value is not None else None,
+            "elbow_angle": round(elbow_angle_value, 1) if elbow_angle_value is not None else None,
             "target_angle": self.target_angle,
             "landmark_confidence": round(landmark_confidence, 3),
             "rep_count": self.rep_counter.rep_count,
@@ -151,18 +166,27 @@ class PoseTracker:
             "ai_coach_message": None,
             "avatar_status": "idle",
             "voice_status": "idle",
+            "pose_detected": pose_detected,
+            "shoulder_present": shoulder_present,
+            "elbow_present": elbow_present,
+            "wrist_present": wrist_present,
+            "hip_present": hip_present,
+            "angle_valid": angle_valid,
         }
 
     def emit(self, packet: dict) -> bool:
         return self.emitter.emit(packet)
 
 
-def landmark_point(landmarks, index: int, min_visibility: float = 0.45) -> tuple[Point | None, float]:
+def landmark_point(landmarks, index: int, min_visibility: float = MIN_PRESENT_SCORE) -> tuple[Point | None, float]:
     landmark = landmarks[index]
-    visibility = getattr(landmark, "visibility", 1.0)
-    if visibility < min_visibility:
-        return None, visibility
-    return Point(landmark.x, landmark.y), visibility
+    visibility = getattr(landmark, "visibility", None)
+    presence = getattr(landmark, "presence", None)
+    scores = [score for score in (visibility, presence) if score is not None]
+    confidence = max(0.0, min(1.0, min(scores))) if scores else 0.5
+    if confidence < min_visibility:
+        return None, confidence
+    return Point(landmark.x, landmark.y), confidence
 
 
 def closest_hand_to_wrist(hand_results, wrist: Point | None) -> tuple[list[Point], float] | None:
@@ -201,6 +225,11 @@ def run_self_test() -> None:
         landmark_confidence=0.92,
         hand_detected=True,
         camera_status="ok",
+        pose_detected=True,
+        shoulder_present=True,
+        elbow_present=True,
+        wrist_present=True,
+        hip_present=True,
     )
     print(json.dumps(packet, indent=2))
 
@@ -278,25 +307,35 @@ def run_tracker(args: argparse.Namespace) -> None:
                 shoulder = elbow = wrist = hip = None
                 confidence = 0.0
                 hand_detected = False
+                pose_detected = bool(pose_results.pose_landmarks)
+                shoulder_present = elbow_present = wrist_present = hip_present = False
                 if pose_results.pose_landmarks:
                     landmarks = pose_results.pose_landmarks.landmark
                     shoulder, shoulder_conf = landmark_point(landmarks, pose_indices["shoulder"])
                     elbow, elbow_conf = landmark_point(landmarks, pose_indices["elbow"])
                     wrist, wrist_conf = landmark_point(landmarks, pose_indices["wrist"])
                     hip, hip_conf = landmark_point(landmarks, pose_indices["hip"])
-                    confidence = (shoulder_conf + elbow_conf + wrist_conf + hip_conf) / 4
+                    shoulder_present = shoulder is not None
+                    elbow_present = elbow is not None
+                    wrist_present = wrist is not None
+                    hip_present = hip is not None
+                    confidence = (shoulder_conf + elbow_conf + wrist_conf) / 3
 
                 selected_hand = closest_hand_to_wrist(hand_results, wrist)
                 if selected_hand:
-                    hand_points, hand_score = selected_hand
                     hand_detected = True
-                    if wrist is None:
-                        wrist = hand_points[0]
-                    confidence = max(confidence, min(1.0, hand_score))
 
-                camera_status = "ok" if shoulder and elbow and wrist and hip else "warning"
-                shoulder_value = shoulder_raise_angle(hip, shoulder, wrist) if camera_status == "ok" else 0.0
-                elbow_value = elbow_angle(shoulder, elbow, wrist) if camera_status == "ok" else 0.0
+                pose_ready = (
+                    shoulder_present
+                    and elbow_present
+                    and wrist_present
+                    and hip_present
+                    and confidence >= MIN_LANDMARK_CONFIDENCE
+                )
+                shoulder_value = shoulder_raise_angle(hip, shoulder, wrist) if pose_ready else None
+                elbow_value = elbow_angle(shoulder, elbow, wrist) if pose_ready else None
+                angle_valid = shoulder_value is not None and elbow_value is not None
+                camera_status = "ok" if pose_ready and angle_valid else "warning"
                 wrist_height_relative = 0.0
                 if wrist and shoulder:
                     wrist_height_relative = max(-1.0, min(1.0, shoulder.y - wrist.y))
@@ -308,6 +347,11 @@ def run_tracker(args: argparse.Namespace) -> None:
                     landmark_confidence=confidence,
                     hand_detected=hand_detected,
                     camera_status=camera_status,
+                    pose_detected=pose_detected,
+                    shoulder_present=shoulder_present,
+                    elbow_present=elbow_present,
+                    wrist_present=wrist_present,
+                    hip_present=hip_present,
                 )
 
                 if camera_status == "ok":
@@ -322,6 +366,17 @@ def run_tracker(args: argparse.Namespace) -> None:
                     draw_landmark(frame, elbow_xy, (86, 216, 167))
                     draw_landmark(frame, wrist_xy, (255, 116, 100))
                     draw_target_arc(frame, shoulder_xy, args.target_angle, shoulder_value, last_packet["coach_state"])
+                else:
+                    cv2.putText(
+                        frame,
+                        "Move your full arm into view.",
+                        (24, height - 34),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.78,
+                        (100, 116, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
 
                 draw_hand_points(frame, hand_results, width, height)
 

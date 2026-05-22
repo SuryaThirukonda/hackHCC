@@ -15,6 +15,12 @@ class RepCounter:
     hold_started_at: float | None = None
     hold_time_sec: float = 0.0
 
+    def invalidate(self) -> None:
+        self.phase = "idle"
+        self.has_reached_target = False
+        self.hold_started_at = None
+        self.hold_time_sec = 0.0
+
     def update(self, shoulder_angle: float) -> str:
         if shoulder_angle < self.rest_angle_threshold:
             if self.has_reached_target:

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -23,7 +23,11 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
+<<<<<<< HEAD
 from storage_provider import get_session_store
+=======
+from sqlite_store import SQLitePhysioStore
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
 
 load_env_file()
@@ -45,22 +49,27 @@ app.mount("/static/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 class SessionState:
     session_id: str = "mock-session"
     user_id: str = "demo-user"
-    exercise: str = "right_arm_raise"
+    exercise: str = "elbow_flexion_extension"
     side: str = "right"
     target_angle: float = 90
     started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     packets: list[PhysioPacket] = field(default_factory=list)
     latest_packet: PhysioPacket | None = None
-    latest_real_packet: PhysioPacket | None = None
-    latest_source: str = "mock"
+    latest_python_packet: PhysioPacket | None = None
+    latest_browser_packet: PhysioPacket | None = None
+    latest_mock_packet: PhysioPacket | None = None
+    active_source: str = "none"
     latest_received_at: float = 0.0
-    real_received_at: float = 0.0
+    python_received_at: float = 0.0
+    browser_received_at: float = 0.0
+    mock_received_at: float = 0.0
     latest_frame: bytes | None = None
     latest_frame_received_at: float = 0.0
 
 
 state = SessionState()
 mock_generator = MockPacketGenerator()
+<<<<<<< HEAD
 coach_orchestrator = CoachOrchestrator()
 store = get_session_store()
 websockets: set[WebSocket] = set()
@@ -96,22 +105,73 @@ def waiting_for_real_packet() -> PhysioPacket:
         avatar_status="idle",
         voice_status="idle",
     )
+=======
+store = SQLitePhysioStore()
+websockets: set[WebSocket] = set()
 
 
-def current_or_mock_packet(source: str = "auto") -> PhysioPacket:
-    if source == "real":
-        return state.latest_real_packet or waiting_for_real_packet()
+def get_coach_provider():
+    provider = os.getenv("COACH_PROVIDER", "mock").lower()
+    if provider == "gemini":
+        return GeminiCoachProvider()
+    return MockCoachProvider()
 
-    if source == "auto" and state.latest_real_packet and time.time() - state.real_received_at < 2:
-        state.latest_packet = state.latest_real_packet
-        state.latest_source = "real"
-        return state.latest_real_packet
 
-    packet = mock_generator.next_packet(state.session_id, state.target_angle)
+SOURCE_RECENT_WINDOW_SEC = 2.5
+FRAME_RECENT_WINDOW_SEC = 3.0
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
+
+
+def source_age_ms(source: str) -> int:
+    received_at = {
+        "python": state.python_received_at,
+        "browser": state.browser_received_at,
+        "mock": state.mock_received_at,
+    }.get(source, 0)
+    if not received_at:
+        return -1
+    return int((time.time() - received_at) * 1000)
+
+
+def source_recent(source: str) -> bool:
+    return 0 <= source_age_ms(source) <= int(SOURCE_RECENT_WINDOW_SEC * 1000)
+
+
+def active_source() -> str:
+    if source_recent("python"):
+        return "python"
+    if source_recent("browser"):
+        return "browser"
+    if state.latest_mock_packet is not None:
+        return "mock"
+    return "none"
+
+
+def latest_packet_for_source(source: str) -> PhysioPacket:
+    if source == "python":
+        if not state.latest_python_packet or not source_recent("python"):
+            raise HTTPException(
+                status_code=404,
+                detail="Python OpenCV tracker not connected. Start python vision/pose_tracker.py or switch to Browser Camera Fallback.",
+            )
+        return state.latest_python_packet
+
+    if source == "browser":
+        if not state.latest_browser_packet or not source_recent("browser"):
+            raise HTTPException(
+                status_code=404,
+                detail="Browser Camera Fallback has no recent packet. Enable webcam tracking in the dashboard.",
+            )
+        return state.latest_browser_packet
+
+    packet = mock_generator.next_packet(state.session_id, state.target_angle, state.exercise)
     state.latest_packet = packet
-    state.latest_source = "mock"
+    state.latest_mock_packet = packet
+    state.active_source = "mock"
     state.latest_received_at = time.time()
+    state.mock_received_at = state.latest_received_at
     state.packets.append(packet)
+    store.save_packet(packet)
     if len(state.packets) > 1200:
         state.packets = state.packets[-800:]
     return packet
@@ -160,44 +220,79 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.started_at_ms = int(time.time() * 1000)
     state.packets = []
     state.latest_packet = None
-    state.latest_real_packet = None
-    state.latest_source = "mock"
+    state.latest_python_packet = None
+    state.latest_browser_packet = None
+    state.latest_mock_packet = None
+    state.active_source = "none"
     state.latest_received_at = 0.0
-    state.real_received_at = 0.0
+    state.python_received_at = 0.0
+    state.browser_received_at = 0.0
+    state.mock_received_at = 0.0
     state.latest_frame = None
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
+<<<<<<< HEAD
     coach_orchestrator.reset_session(session_id)
+=======
+    store.save_session_start(
+        session_id=session_id,
+        user_id=state.user_id,
+        exercise=state.exercise,
+        side=state.side,
+        target_angle=state.target_angle,
+        started_at_ms=state.started_at_ms,
+    )
+>>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
     return SessionStartResponse(session_id=session_id, status="started")
 
 
 @app.post("/api/packets")
 async def ingest_packet(packet: PhysioPacket) -> dict[str, int | str]:
     normalized = apply_local_rules(packet)
+    now = time.time()
     state.latest_packet = normalized
-    state.latest_real_packet = normalized
-    state.latest_source = "real"
-    state.latest_received_at = time.time()
-    state.real_received_at = state.latest_received_at
+    state.latest_received_at = now
+    if normalized.source == "python_opencv":
+        state.latest_python_packet = normalized
+        state.python_received_at = now
+        state.active_source = "python"
+    elif normalized.source == "browser_mediapipe":
+        state.latest_browser_packet = normalized
+        state.browser_received_at = now
+        if not source_recent("python"):
+            state.active_source = "browser"
+    else:
+        state.latest_mock_packet = normalized
+        state.mock_received_at = now
+        if not source_recent("python") and not source_recent("browser"):
+            state.active_source = "mock"
     state.packets.append(normalized)
+    store.save_packet(normalized)
     await broadcast_packet(normalized)
     return {"status": "accepted", "packet_count": len(state.packets)}
 
 
 @app.get("/api/live/latest", response_model=PhysioPacket)
-def latest_packet(source: str = Query("auto", pattern="^(auto|mock|real)$")) -> PhysioPacket:
-    return current_or_mock_packet(source)
+def latest_packet(source: str = Query("python", pattern="^(python|browser|mock)$")) -> PhysioPacket:
+    return latest_packet_for_source(source)
 
 
 @app.get("/api/live/source")
 def live_source() -> dict[str, Any]:
+    current_active = active_source()
+    active_age_ms = source_age_ms(current_active)
     return {
-        "latest_source": state.latest_source,
+        "active_source": current_active,
         "session_id": state.session_id,
-        "has_real_packet": state.latest_real_packet is not None,
-        "real_age_sec": None if state.latest_real_packet is None else round(time.time() - state.real_received_at, 2),
-        "has_vision_frame": state.latest_frame is not None,
-        "vision_frame_age_sec": None if state.latest_frame is None else round(time.time() - state.latest_frame_received_at, 2),
+        "latest_packet_age_ms": active_age_ms,
+        "python_recent": source_recent("python"),
+        "browser_recent": source_recent("browser"),
+        "mock_enabled": True,
+        "vision_frame_available": state.latest_frame is not None and time.time() - state.latest_frame_received_at <= FRAME_RECENT_WINDOW_SEC,
+        "python_packet_age_ms": source_age_ms("python"),
+        "browser_packet_age_ms": source_age_ms("browser"),
+        "mock_packet_age_ms": source_age_ms("mock"),
+        "vision_frame_age_ms": -1 if state.latest_frame is None else int((time.time() - state.latest_frame_received_at) * 1000),
     }
 
 
@@ -243,17 +338,26 @@ def coach_cue(packet: PhysioPacket) -> CoachCueResponse:
 def end_session(request: SessionEndRequest) -> SessionSummary:
     packets = [packet for packet in state.packets if packet.session_id == request.session_id]
     if not packets:
-        packets = [current_or_mock_packet()]
+        packets = [latest_packet_for_source("mock")]
 
     ended_at_ms = int(time.time() * 1000)
     total_reps = max(packet.rep_count for packet in packets)
-    clean_reps = sum(
-        1 for packet in packets
-        if packet.rep_phase == "rep_complete" and packet.physio_score >= 75
-    )
-    best_angle = max(packet.shoulder_angle for packet in packets)
-    average_angle = sum(packet.shoulder_angle for packet in packets) / len(packets)
-    average_score = round(sum(packet.physio_score for packet in packets) / len(packets))
+    clean_rep_indexes = {
+        packet.rep_count for packet in packets
+        if packet.rep_phase == "rep_complete" and packet.rep_count > 0 and (packet.physio_score or 0) >= 75
+    }
+    clean_reps = len(clean_rep_indexes)
+    if state.exercise == "elbow_flexion_extension":
+        valid_angles = [packet.elbow_angle for packet in packets if packet.elbow_angle is not None]
+        best_angle = min(valid_angles) if valid_angles else 0.0
+        summary_angle_label = "best elbow flexion"
+    else:
+        valid_angles = [packet.shoulder_angle for packet in packets if packet.shoulder_angle is not None]
+        best_angle = max(valid_angles) if valid_angles else 0.0
+        summary_angle_label = "best angle"
+    valid_scores = [packet.physio_score for packet in packets if packet.physio_score is not None]
+    average_angle = sum(valid_angles) / len(valid_angles) if valid_angles else 0.0
+    average_score = round(sum(valid_scores) / len(valid_scores)) if valid_scores else 0
     max_jitter = max(packet.combined_jitter_score for packet in packets)
     average_jitter = sum(packet.combined_jitter_score for packet in packets) / len(packets)
 
@@ -274,8 +378,8 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         average_jitter_score=round(average_jitter, 2),
         pain_level=request.pain_level,
         fatigue_level=request.fatigue_level,
-        summary_text=f"User completed {total_reps} reps with a best angle of {best_angle:.1f} degrees.",
-        recommendation_text="Repeat this target next session and focus on smooth lowering.",
+        summary_text=f"User completed {total_reps} reps with {summary_angle_label} of {best_angle:.1f} degrees.",
+        recommendation_text="Focus on a controlled bend, brief hold, and smooth straighten phase.",
     )
     summary = coach_orchestrator.summarize_session(packets, fallback_summary)
     store.save_summary(summary)
@@ -287,13 +391,22 @@ def list_sessions() -> list[SessionSummary]:
     return store.list_summaries()
 
 
+@app.get("/api/storage/status")
+def storage_status() -> dict[str, Any]:
+    return store.counts()
+
+
 @app.websocket("/ws/live")
 async def live_stream(websocket: WebSocket) -> None:
     await websocket.accept()
     websockets.add(websocket)
     try:
         while True:
-            packet = current_or_mock_packet("auto")
+            current_active = active_source()
+            if current_active == "none":
+                await asyncio.sleep(0.5)
+                continue
+            packet = latest_packet_for_source(current_active)
             await websocket.send_json(packet.model_dump())
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
