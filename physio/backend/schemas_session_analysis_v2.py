@@ -30,6 +30,7 @@ class AggregateMetricsV2(BaseModel):
     average_rep_duration_sec: float | None = None
     average_jitter_score: float | None = None
     max_jitter_score: float | None = None
+    total_jitter_events: int | None = Field(default=None, ge=0)
     raw_average_elbow_angle: float | None = None
     smoothed_average_elbow_angle: float | None = None
     raw_average_shoulder_angle: float | None = None
@@ -57,6 +58,7 @@ class TrackingQualityV2(BaseModel):
     valid_frame_ratio: float = Field(default=0, ge=0, le=1)
     average_landmark_confidence: float | None = Field(default=None, ge=0, le=1)
     average_jitter_score: float | None = Field(default=None, ge=0, le=1)
+    total_jitter_events: int | None = Field(default=None, ge=0)
 
 
 class IssueSummaryV2(BaseModel):
@@ -90,6 +92,7 @@ class RepBreakdownV2(BaseModel):
     rep_duration_sec: float | None = None
     pace: str = "unknown"
     jitter_score: float | None = None
+    jitter_count: int | None = Field(default=None, ge=0)
     shoulder_drift: float | None = None
     sensor_linearity_score: float | None = None
     physio_score: int | None = None

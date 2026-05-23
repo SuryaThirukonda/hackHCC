@@ -234,6 +234,13 @@ export function createPushMotionAnalyzer(exercise) {
     lastCompletedRep: null,
     completedReps: [],
     sensorSamples: [],
+    repJitterEvents: 0,
+    repJitterScoreSum: 0,
+    repMaxJitterScore: 0,
+    repFrameCount: 0,
+    repHoldResidualSum: 0,
+    repHoldFrames: 0,
+    repReversalEvents: 0,
     pendingTransition: null,
     lastOutput: null,
     lastFrameTimestampMs: null
@@ -255,6 +262,13 @@ export function createPushMotionAnalyzer(exercise) {
     state.lastRepDurationSec = null;
     state.sensorSamples = [];
     state.pendingTransition = null;
+    state.repJitterEvents = 0;
+    state.repJitterScoreSum = 0;
+    state.repMaxJitterScore = 0;
+    state.repFrameCount = 0;
+    state.repHoldResidualSum = 0;
+    state.repHoldFrames = 0;
+    state.repReversalEvents = 0;
   }
 
   function acceptTransition(nextPhase, timestampMs) {
@@ -301,8 +315,45 @@ export function createPushMotionAnalyzer(exercise) {
       calibrationTravelCm,
       calibratedPosition: calibrated,
       calibrationComplete: calibrationCaptured,
-      validLandmarks: frame.validLandmarks ?? frame.angle_valid ?? frame.valid_landmarks ?? false
+      validLandmarks: frame.validLandmarks ?? frame.angle_valid ?? frame.valid_landmarks ?? false,
+      jitterEvent: Boolean(frame.jitterGroupedEvent ?? frame.jitter_grouped_event ?? frame.jitterEvent ?? frame.jitter_event),
+      trendResidual: frame.trendResidual ?? frame.trend_residual ?? null,
+      directionReversals: frame.directionReversals ?? frame.direction_reversals ?? 0
     };
+  }
+
+  function repJitterScore({
+    groupedEventCount,
+    holdResidualAvg,
+    reversalEvents,
+    maxJitterScore
+  }) {
+    const eventScore = Math.min(groupedEventCount / 2.5, 1) * 0.5;
+    const holdScore = holdResidualAvg > 0 ? clamp(holdResidualAvg / 8, 0, 1) * 0.25 : 0;
+    const reversalScore = Math.min(reversalEvents / 2, 1) * 0.25;
+    return clamp(
+      Math.max(maxJitterScore * 0.12, eventScore + holdScore + reversalScore),
+      0,
+      1
+    );
+  }
+
+  function trackRepJitter({
+    jitterScore,
+    jitterEvent,
+    phase,
+    trendResidual,
+    directionReversals
+  }) {
+    state.repFrameCount += 1;
+    state.repJitterScoreSum += jitterScore ?? 0;
+    state.repMaxJitterScore = Math.max(state.repMaxJitterScore, jitterScore ?? 0);
+    if (jitterEvent) state.repJitterEvents += 1;
+    if ((phase === "EXTENDED_HOLD" || phase === "START_BENT_HOLD") && Number.isFinite(trendResidual)) {
+      state.repHoldResidualSum += trendResidual;
+      state.repHoldFrames += 1;
+    }
+    if (directionReversals >= 3) state.repReversalEvents += 1;
   }
 
   function updateRanges(elbowAngle, shoulderAngle) {
@@ -343,7 +394,17 @@ export function createPushMotionAnalyzer(exercise) {
     return Math.max(0, state.pushDirection * delta);
   }
 
-  function currentMetrics(frame, jitterScore) {
+  function estimateRepJitter() {
+    return repJitterScore({
+      groupedEventCount: state.repJitterEvents,
+      holdResidualAvg: state.repHoldFrames ? state.repHoldResidualSum / state.repHoldFrames : 0,
+      reversalEvents: state.repReversalEvents,
+      maxJitterScore: state.repMaxJitterScore
+    });
+  }
+
+  function currentMetrics(frame) {
+    const repJitter = estimateRepJitter();
     const rangeOfMotion =
       state.minElbowAngle == null || state.maxElbowAngle == null
         ? 0
@@ -361,7 +422,7 @@ export function createPushMotionAnalyzer(exercise) {
       physioScore: physioScore({
         rangeOfMotion,
         pushDepthCm: state.maxPushDepthCm,
-        jitterScore,
+        jitterScore: repJitter,
         pace,
         holdTimeSec: state.holdTimeSec,
         repDurationSec,
@@ -370,13 +431,13 @@ export function createPushMotionAnalyzer(exercise) {
     };
   }
 
-  function coachFor({ valid, sensorValid, jitterScore, pace, repJustCompleted }) {
+  function coachFor({ valid, sensorValid, pace, repJustCompleted }) {
     if (!valid) return "low_confidence";
     if (state.repCount >= config.repGoal) return "session_complete";
     if (repJustCompleted) return pace === "too_fast" ? "too_fast" : "rep_complete";
     if (!sensorValid && ["START_BENT_READY", "PUSHING", "EXTENDED_HOLD"].includes(state.phase)) return "almost_there";
     if (state.phase === "EXTENDED_HOLD" && state.holdTimeSec < config.requiredHoldSeconds) return "hold_longer";
-    if (jitterScore > config.jitterWarning) return "too_jittery";
+    if (estimateRepJitter() > config.jitterWarning) return "too_jittery";
     if (state.shoulderDrift > config.shoulderDriftWarning) return "keep_upper_arm_still";
     if (pace === "too_fast") return "too_fast";
     return "good_form";
@@ -445,6 +506,13 @@ export function createPushMotionAnalyzer(exercise) {
       normalizedFrame.sensorJitterScore || 0,
       sensorLinearity
     ), 0, 1);
+    trackRepJitter({
+      jitterScore,
+      jitterEvent: normalizedFrame.jitterEvent,
+      phase: state.phase,
+      trendResidual: normalizedFrame.trendResidual,
+      directionReversals: normalizedFrame.directionReversals
+    });
 
     let repJustCompleted = false;
     let completedRep = null;
@@ -530,10 +598,16 @@ export function createPushMotionAnalyzer(exercise) {
           const durationSec = state.repStartMs ? (timestampMs - state.repStartMs) / 1000 : 0;
           const rangeOfMotion = (state.maxElbowAngle ?? elbowAngle) - (state.minElbowAngle ?? elbowAngle);
           const pace = paceForDuration(durationSec, config);
+          const repJitter = repJitterScore({
+            groupedEventCount: state.repJitterEvents,
+            holdResidualAvg: state.repHoldFrames ? state.repHoldResidualSum / state.repHoldFrames : 0,
+            reversalEvents: state.repReversalEvents,
+            maxJitterScore: state.repMaxJitterScore
+          });
           const score = physioScore({
             rangeOfMotion,
             pushDepthCm: state.maxPushDepthCm,
-            jitterScore,
+            jitterScore: repJitter,
             pace,
             holdTimeSec: state.holdTimeSec,
             repDurationSec: durationSec,
@@ -555,7 +629,8 @@ export function createPushMotionAnalyzer(exercise) {
             hold_time_sec: round(state.holdTimeSec, 1),
             rep_duration_sec: round(durationSec, 1),
             pace,
-            jitter_score: round(jitterScore, 2),
+            jitter_score: round(repJitter, 2),
+            jitter_count: state.repJitterEvents,
             shoulder_drift: round(state.shoulderDrift, 1),
             physio_score: score,
             issue:
@@ -565,7 +640,7 @@ export function createPushMotionAnalyzer(exercise) {
                   ? "did_not_hold_long_enough"
                   : pace === "too_fast"
                     ? "moved_too_fast"
-                    : jitterScore > config.jitterWarning
+                    : repJitter > config.jitterWarning
                       ? "too_jittery"
                       : state.shoulderDrift > config.shoulderDriftWarning
                         ? "shoulder_compensation"
@@ -574,7 +649,7 @@ export function createPushMotionAnalyzer(exercise) {
               state.maxPushDepthCm >= config.minPushDepthCm &&
               state.holdTimeSec >= config.requiredHoldSeconds &&
               pace === "good" &&
-              jitterScore <= config.jitterWarning &&
+              repJitter <= config.jitterWarning &&
               state.shoulderDrift <= config.shoulderDriftWarning
           };
           state.completedReps.push(completedRep);
@@ -586,11 +661,10 @@ export function createPushMotionAnalyzer(exercise) {
       }
     }
 
-    const metrics = currentMetrics(normalizedFrame, jitterScore);
+    const metrics = currentMetrics(normalizedFrame);
     const coachState = coachFor({
       valid,
       sensorValid: normalizedFrame.sensorValid,
-      jitterScore,
       pace: completedRep?.pace || metrics.pace,
       repJustCompleted
     });

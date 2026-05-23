@@ -1,4 +1,12 @@
 import { ELBOW_FLEXION_SMOOTHING_CONFIG } from "./smoothingConfig.js";
+import { createRefinedJitterDetector } from "./refinedJitterDetector.js";
+
+export function isInSessionEdgeTimestamp(timestampMs, sessionStartMs, sessionEndMs, config = ELBOW_FLEXION_SMOOTHING_CONFIG) {
+  if (!Number.isFinite(timestampMs) || !Number.isFinite(sessionStartMs)) return false;
+  if (timestampMs - sessionStartMs < config.edgeTrimMs) return true;
+  if (Number.isFinite(sessionEndMs) && sessionEndMs - timestampMs < config.edgeTrimMs) return true;
+  return false;
+}
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -52,16 +60,14 @@ function validityReason(frame, config) {
 
 export function createPoseSignalSmoother(configOverrides = {}) {
   const config = { ...ELBOW_FLEXION_SMOOTHING_CONFIG, ...configOverrides };
+  const jitterDetector = createRefinedJitterDetector(config);
   const state = {
     validRawAngles: [],
     validRawShoulders: [],
     smoothedAngles: [],
-    residuals: [],
     velocityResiduals: [],
     velocities: [],
-    peakResiduals: [],        // short window of raw residuals for spike detection
     previousRawAngle: null,
-    previousRawAngle2: null,
     previousRawTimestampMs: null,
     previousSmoothedAngle: null,
     previousSmoothedTimestampMs: null,
@@ -72,19 +78,17 @@ export function createPoseSignalSmoother(configOverrides = {}) {
     flexedFrames: 0,
     trackingFrames: 0,
     wasStraight: false,
-    wasFlexed: false
+    wasFlexed: false,
+    lastJitter: null
   };
 
   function reset() {
     state.validRawAngles = [];
     state.validRawShoulders = [];
     state.smoothedAngles = [];
-    state.residuals = [];
     state.velocityResiduals = [];
     state.velocities = [];
-    state.peakResiduals = [];
     state.previousRawAngle = null;
-    state.previousRawAngle2 = null;
     state.previousRawTimestampMs = null;
     state.previousSmoothedAngle = null;
     state.previousSmoothedTimestampMs = null;
@@ -96,6 +100,8 @@ export function createPoseSignalSmoother(configOverrides = {}) {
     state.trackingFrames = 0;
     state.wasStraight = false;
     state.wasFlexed = false;
+    state.lastJitter = null;
+    jitterDetector.reset();
   }
 
   function update(frame = {}) {
@@ -103,6 +109,7 @@ export function createPoseSignalSmoother(configOverrides = {}) {
     const rawElbow = finiteNumber(frame.elbowAngle ?? frame.elbow_angle);
     const rawShoulder = finiteNumber(frame.shoulderAngle ?? frame.shoulder_angle);
     const landmarkConfidence = clamp(frame.landmarkConfidence ?? frame.landmark_confidence ?? 0, 0, 1);
+    const analyzerPhase = frame.analyzerPhase ?? frame.analyzer_phase ?? null;
     const reason = validityReason({
       ...frame,
       elbowAngle: rawElbow,
@@ -116,6 +123,19 @@ export function createPoseSignalSmoother(configOverrides = {}) {
       state.emaElbow != null &&
       state.emaShoulder != null;
     const analyzerValid = rawValid || withinGrace;
+    let jitterResult = state.lastJitter || {
+      jitterEvent: false,
+      jitterGroupedEvent: false,
+      jitterSuspicious: false,
+      jitterReason: null,
+      trackingNoise: false,
+      predictedTrendAngle: null,
+      trendResidual: null,
+      rawSmoothedResidual: null,
+      directionReversals: 0,
+      cameraJitterScore: 0,
+      debug: null
+    };
 
     if (rawValid) {
       state.lastValidAt = timestampMs;
@@ -126,9 +146,6 @@ export function createPoseSignalSmoother(configOverrides = {}) {
 
       const medianElbow = state.validRawAngles.length >= 3 ? median(state.validRawAngles) : rawElbow;
       const medianShoulder = state.validRawShoulders.length >= 3 ? median(state.validRawShoulders) : rawShoulder;
-      const spikeResidual = state.previousRawAngle != null && state.previousRawAngle2 != null
-        ? Math.abs(rawElbow - 2 * state.previousRawAngle + state.previousRawAngle2)
-        : 0;
       state.emaElbow = state.emaElbow == null
         ? medianElbow
         : state.emaElbow + config.emaAlpha * (medianElbow - state.emaElbow);
@@ -149,20 +166,32 @@ export function createPoseSignalSmoother(configOverrides = {}) {
         const smoothVelocity = (state.emaElbow - state.previousSmoothedAngle) / smoothDt;
         velocityResidual = Math.abs(rawVelocity - smoothVelocity);
       }
-      state.previousRawAngle2 = state.previousRawAngle;
       state.previousRawAngle = rawElbow;
       state.previousRawTimestampMs = timestampMs;
       state.previousSmoothedAngle = state.emaElbow;
       state.previousSmoothedTimestampMs = timestampMs;
 
-      state.residuals.push(spikeResidual);
-      while (state.residuals.length > config.residualWindowSize) state.residuals.shift();
       state.velocityResiduals.push(velocityResidual);
       while (state.velocityResiduals.length > config.velocityWindowSize) state.velocityResiduals.shift();
 
-      // Track raw spike residuals for peak-jitter scoring
-      state.peakResiduals.push(spikeResidual);
-      while (state.peakResiduals.length > (config.peakWindowSize || 4)) state.peakResiduals.shift();
+      jitterResult = jitterDetector.update({
+        timestampMs,
+        rawAngle: rawElbow,
+        smoothedAngle: state.emaElbow,
+        landmarkConfidence,
+        analyzerPhase,
+        rawValid: true
+      });
+      state.lastJitter = jitterResult;
+    } else if (!analyzerValid) {
+      jitterResult = {
+        ...jitterResult,
+        jitterEvent: false,
+        jitterGroupedEvent: false,
+        jitterSuspicious: false,
+        jitterReason: reason === "low_landmark_confidence" ? "tracking_noise" : null,
+        trackingNoise: reason === "low_landmark_confidence"
+      };
     }
 
     const smoothedElbow = analyzerValid ? state.emaElbow : null;
@@ -196,22 +225,15 @@ export function createPoseSignalSmoother(configOverrides = {}) {
     state.flexedFrames = analyzerValid && flexedNow ? state.flexedFrames + 1 : 0;
     state.trackingFrames = analyzerValid ? state.trackingFrames + 1 : 0;
 
-    const residualJitter = clamp(mean(state.residuals) / config.residualJitterNormalizerDeg, 0, 1);
     const velocityResidualJitter = clamp(mean(state.velocityResiduals) / config.velocityResidualNormalizerDegPerSec, 0, 1);
     const accelerationJitter = clamp(stddev(state.velocities) / 360, 0, 1);
-
-    // Peak jitter: worst single spike in the short window — catches transient spikes
-    // that get averaged away in the running mean
-    const peakNorm = config.residualJitterNormalizerDeg || 12;
-    const peakJitter = clamp(
-      state.peakResiduals.length > 0 ? Math.max(...state.peakResiduals) / peakNorm : 0,
-      0, 1
+    const cameraJitterScore = clamp(
+      (jitterResult.cameraJitterScore ?? 0) * 0.85 +
+      velocityResidualJitter * 0.1 +
+      accelerationJitter * 0.05,
+      0,
+      1
     );
-
-    const smoothJitterRaw = clamp(residualJitter * 0.8 + velocityResidualJitter * 0.15 + accelerationJitter * 0.05, 0, 1);
-    const peakWeight = config.peakJitterWeight || 0.45;
-    const smoothWeight = config.smoothJitterWeight || 0.55;
-    const cameraJitterScore = clamp(smoothWeight * smoothJitterRaw + peakWeight * peakJitter, 0, 1);
     const lowSamplePenalty = state.validRawAngles.length < 3 ? 0.75 : 1;
     const confidenceLabel = analyzerValid
       ? rawValid
@@ -242,9 +264,21 @@ export function createPoseSignalSmoother(configOverrides = {}) {
       },
       jitter: {
         cameraJitterScore: round(cameraJitterScore, 3),
-        peakJitterScore: round(peakJitter, 3),
-        angleResidual: rawValid ? round(state.residuals.at(-1), 1) : null,
-        velocityResidualDegPerSec: rawValid ? round(state.velocityResiduals.at(-1), 1) : null
+        peakJitterScore: round(jitterResult.trendResidual != null
+          ? clamp(jitterResult.trendResidual / config.movingTrendResidualDeg, 0, 1)
+          : 0, 3),
+        jitterEvent: Boolean(jitterResult.jitterGroupedEvent),
+        jitterGroupedEvent: Boolean(jitterResult.jitterGroupedEvent),
+        jitterSuspicious: Boolean(jitterResult.jitterSuspicious),
+        jitterReason: jitterResult.jitterReason,
+        trackingNoise: Boolean(jitterResult.trackingNoise),
+        predictedTrendAngle: jitterResult.predictedTrendAngle,
+        trendResidual: jitterResult.trendResidual,
+        rawSmoothedResidual: jitterResult.rawSmoothedResidual,
+        directionReversals: jitterResult.directionReversals ?? 0,
+        angleResidual: jitterResult.trendResidual,
+        velocityResidualDegPerSec: rawValid ? round(state.velocityResiduals.at(-1), 1) : null,
+        debug: jitterResult.debug
       },
       stableFlags: {
         isStraightStable: state.straightFrames >= config.requiredStableFrames,

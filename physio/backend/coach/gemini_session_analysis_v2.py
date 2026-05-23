@@ -173,6 +173,7 @@ def compact_packet_for_gemini(packet: FinalSessionAnalysisPacketV2) -> dict[str,
             "data_quality": packet.tracking_quality.data_quality,
             "valid_frame_ratio": packet.tracking_quality.valid_frame_ratio,
             "average_jitter_score": packet.tracking_quality.average_jitter_score,
+            "total_jitter_events": packet.tracking_quality.total_jitter_events,
         },
         "trace_summary": packet.trace_summary,
         "issue_summary": packet.issue_summary.model_dump(),
@@ -206,8 +207,9 @@ def build_analysis_prompt(packet: FinalSessionAnalysisPacketV2, safe_packet: dic
     else:
         metric_hint = "Mention the rep count, best range of motion, and one key takeaway."
         written_hint = (
-            "Cover: how many reps were completed vs goal, quality (score, jitter), range of motion achieved, "
-            "notable observations from the rep breakdown (e.g. hold times, pace), and one specific improvement tip."
+            "Cover: how many reps were completed vs goal, quality (score, jitter, jitter event count), range of motion achieved, "
+            "notable observations from the rep breakdown (e.g. hold times, pace), and one specific improvement tip. "
+            "Only mention jitter or unsteady motion if total_jitter_events > 0 or average_jitter_score is clearly elevated."
         )
 
     return (

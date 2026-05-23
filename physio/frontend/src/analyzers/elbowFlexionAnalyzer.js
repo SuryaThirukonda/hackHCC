@@ -114,6 +114,13 @@ export function createElbowFlexionAnalyzer(exercise) {
     lastCompletedRep: null,
     completedReps: [],
     angleSamples: [],
+    repJitterEvents: 0,
+    repJitterScoreSum: 0,
+    repMaxJitterScore: 0,
+    repFrameCount: 0,
+    repHoldResidualSum: 0,
+    repHoldFrames: 0,
+    repReversalEvents: 0,
     pendingTransition: null,
     lastOutput: null,
     lastFrameTimestampMs: null
@@ -130,6 +137,13 @@ export function createElbowFlexionAnalyzer(exercise) {
     state.shoulderDrift = 0;
     state.lastRepDurationSec = null;
     state.pendingTransition = null;
+    state.repJitterEvents = 0;
+    state.repJitterScoreSum = 0;
+    state.repMaxJitterScore = 0;
+    state.repFrameCount = 0;
+    state.repHoldResidualSum = 0;
+    state.repHoldFrames = 0;
+    state.repReversalEvents = 0;
   }
 
   function acceptTransition(nextPhase, timestampMs) {
@@ -202,8 +216,45 @@ export function createElbowFlexionAnalyzer(exercise) {
       shoulderAngle,
       landmarkConfidence,
       jitterScore: frame.jitterScore ?? frame.jitter_score ?? null,
+      jitterEvent: Boolean(frame.jitterGroupedEvent ?? frame.jitter_grouped_event ?? frame.jitterEvent ?? frame.jitter_event),
+      trendResidual: frame.trendResidual ?? frame.trend_residual ?? null,
+      directionReversals: frame.directionReversals ?? frame.direction_reversals ?? 0,
       validLandmarks
     };
+  }
+
+  function repJitterScore({
+    groupedEventCount,
+    holdResidualAvg,
+    reversalEvents,
+    maxJitterScore
+  }) {
+    const eventScore = Math.min(groupedEventCount / 2.5, 1) * 0.5;
+    const holdScore = holdResidualAvg > 0 ? clamp(holdResidualAvg / 8, 0, 1) * 0.25 : 0;
+    const reversalScore = Math.min(reversalEvents / 2, 1) * 0.25;
+    return clamp(
+      Math.max(maxJitterScore * 0.12, eventScore + holdScore + reversalScore),
+      0,
+      1
+    );
+  }
+
+  function trackRepJitter({
+    jitterScore,
+    jitterEvent,
+    phase,
+    trendResidual,
+    directionReversals
+  }) {
+    state.repFrameCount += 1;
+    state.repJitterScoreSum += jitterScore ?? 0;
+    state.repMaxJitterScore = Math.max(state.repMaxJitterScore, jitterScore ?? 0);
+    if (jitterEvent) state.repJitterEvents += 1;
+    if (phase === "FLEXED_HOLD" && Number.isFinite(trendResidual)) {
+      state.repHoldResidualSum += trendResidual;
+      state.repHoldFrames += 1;
+    }
+    if (directionReversals >= 3) state.repReversalEvents += 1;
   }
 
   function fallbackJitter(timestampMs, elbowAngle) {
@@ -230,12 +281,21 @@ export function createElbowFlexionAnalyzer(exercise) {
     return clamp(averageChange / 240, 0, 1);
   }
 
-  function classifyCoach({ valid, elbowAngle, jitterScore, pace, repJustCompleted }) {
+  function estimateRepJitter() {
+    return repJitterScore({
+      groupedEventCount: state.repJitterEvents,
+      holdResidualAvg: state.repHoldFrames ? state.repHoldResidualSum / state.repHoldFrames : 0,
+      reversalEvents: state.repReversalEvents,
+      maxJitterScore: state.repMaxJitterScore
+    });
+  }
+
+  function classifyCoach({ valid, elbowAngle, pace, repJustCompleted }) {
     if (!valid) return "low_confidence";
     if (state.repCount >= config.repGoal) return "session_complete";
     if (repJustCompleted) return pace === "too_fast" ? "too_fast" : "rep_complete";
     if (state.phase === "FLEXED_HOLD" && state.holdTimeSec < config.requiredHoldSeconds) return "hold_longer";
-    if (jitterScore > config.jitterWarning) return "too_jittery";
+    if (estimateRepJitter() > config.jitterWarning) return "too_jittery";
     if (state.shoulderDrift > config.shoulderDriftWarning) return "keep_upper_arm_still";
     if (state.phase === "WAITING_FOR_START" && elbowAngle < config.startElbowMin) return "straighten_more";
     if (state.phase === "FLEXING" && elbowAngle > config.flexedElbowMax) return "bend_more";
@@ -243,7 +303,8 @@ export function createElbowFlexionAnalyzer(exercise) {
     return "good_form";
   }
 
-  function currentMetrics(jitterScore, timestampMs) {
+  function currentMetrics(timestampMs) {
+    const repJitter = estimateRepJitter();
     const rangeOfMotion =
       state.minElbowAngle == null || state.maxElbowAngle == null
         ? 0
@@ -259,7 +320,7 @@ export function createElbowFlexionAnalyzer(exercise) {
       pace,
       physioScore: physioScore({
         rangeOfMotion,
-        jitterScore,
+        jitterScore: repJitter,
         pace,
         holdTimeSec: state.holdTimeSec,
         repDurationSec,
@@ -308,6 +369,13 @@ export function createElbowFlexionAnalyzer(exercise) {
     }
 
     updateRepRange(elbowAngle, shoulderAngle);
+    trackRepJitter({
+      jitterScore,
+      jitterEvent: normalizedFrame.jitterEvent,
+      phase: state.phase,
+      trendResidual: normalizedFrame.trendResidual,
+      directionReversals: normalizedFrame.directionReversals
+    });
 
     // EMA angular velocity (degrees/sec, + = arm extending, - = arm flexing)
     if (state.lastAngle != null && state.lastAngleMs != null) {
@@ -367,9 +435,15 @@ export function createElbowFlexionAnalyzer(exercise) {
         const durationSec = state.repStartMs ? (timestampMs - state.repStartMs) / 1000 : 0;
         const rangeOfMotion = (state.maxElbowAngle ?? elbowAngle) - (state.minElbowAngle ?? elbowAngle);
         const pace = paceForDuration(durationSec, config);
+        const repJitter = repJitterScore({
+          groupedEventCount: state.repJitterEvents,
+          holdResidualAvg: state.repHoldFrames ? state.repHoldResidualSum / state.repHoldFrames : 0,
+          reversalEvents: state.repReversalEvents,
+          maxJitterScore: state.repMaxJitterScore
+        });
         const score = physioScore({
           rangeOfMotion,
-          jitterScore,
+          jitterScore: repJitter,
           pace,
           holdTimeSec: state.holdTimeSec,
           repDurationSec: durationSec,
@@ -386,7 +460,8 @@ export function createElbowFlexionAnalyzer(exercise) {
           hold_time_sec: round(state.holdTimeSec, 1),
           rep_duration_sec: round(durationSec, 1),
           pace,
-          jitter_score: round(jitterScore, 2),
+          jitter_score: round(repJitter, 2),
+          jitter_count: state.repJitterEvents,
           shoulder_drift: round(state.shoulderDrift, 1),
           physio_score: score,
           issue:
@@ -394,7 +469,7 @@ export function createElbowFlexionAnalyzer(exercise) {
               ? "did_not_hold_long_enough"
               : pace === "too_fast"
                 ? "moved_too_fast"
-                : jitterScore > config.jitterWarning
+                : repJitter > config.jitterWarning
                   ? "too_jittery"
                   : state.shoulderDrift > config.shoulderDriftWarning
                     ? "shoulder_compensation"
@@ -402,7 +477,7 @@ export function createElbowFlexionAnalyzer(exercise) {
           clean:
             state.holdTimeSec >= config.requiredHoldSeconds &&
             pace === "good" &&
-            jitterScore <= config.jitterWarning &&
+            repJitter <= config.jitterWarning &&
             state.shoulderDrift <= config.shoulderDriftWarning
         };
         state.completedReps.push(completedRep);
@@ -414,11 +489,10 @@ export function createElbowFlexionAnalyzer(exercise) {
       }
     }
 
-    const metrics = currentMetrics(jitterScore, timestampMs);
+    const metrics = currentMetrics(timestampMs);
     const coachState = classifyCoach({
       valid,
       elbowAngle,
-      jitterScore,
       pace: completedRep?.pace || metrics.pace,
       repJustCompleted
     });

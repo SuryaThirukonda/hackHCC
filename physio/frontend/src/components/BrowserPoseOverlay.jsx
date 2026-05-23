@@ -362,6 +362,7 @@ export default function BrowserPoseOverlay({
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
   const analyzerRef = useRef(createAnalyzerForExercise(exercise));
+  const lastAnalyzerPhaseRef = useRef(null);
   const smootherRef = useRef(createPoseSignalSmoother(smoothingConfigForExercise(exercise?.id)));
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
@@ -445,6 +446,7 @@ export default function BrowserPoseOverlay({
       if (!recordingActive) {
         analyzerRef.current.reset();
         smootherRef.current.reset();
+        lastAnalyzerPhaseRef.current = null;
         samplesRef.current = [];
       }
       previousSessionRef.current = sessionId;
@@ -458,6 +460,7 @@ export default function BrowserPoseOverlay({
     if (!previousRecordingRef.current && recordingActive) {
       analyzerRef.current.reset();
       smootherRef.current.reset();
+      lastAnalyzerPhaseRef.current = null;
       samplesRef.current = [];
     }
     previousRecordingRef.current = recordingActive;
@@ -674,6 +677,7 @@ export default function BrowserPoseOverlay({
         elbowAngle,
         shoulderAngle: upperArmAngle,
         landmarkConfidence: confidence,
+        analyzerPhase: lastAnalyzerPhaseRef.current,
         shoulder,
         elbow,
         wrist
@@ -755,6 +759,10 @@ export default function BrowserPoseOverlay({
         landmarkConfidence: confidence,
         jitterScore: combinedJitter,
         cameraJitterScore: motion.jitter,
+        jitterEvent: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter?.jitterGroupedEvent) : false,
+        jitterGroupedEvent: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter?.jitterGroupedEvent) : false,
+        trendResidual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter?.trendResidual : null,
+        directionReversals: smootherEnabled && smoothedFrame ? smoothedFrame.jitter?.directionReversals : 0,
         distanceCm: latestSensor?.distance_cm ?? null,
         sensorTimestampMs: latestSensor?.timestamp_ms ?? null,
         sensorJitterScore: packetCalibrationComplete ? 0 : sensorJitterScore,
@@ -769,12 +777,17 @@ export default function BrowserPoseOverlay({
         shoulderAngle: analyzerValid ? analyzerShoulderAngle : null,
         landmarkConfidence: confidence,
         jitterScore: combinedJitter,
+        jitterEvent: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter?.jitterGroupedEvent) : false,
+        jitterGroupedEvent: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter?.jitterGroupedEvent) : false,
+        trendResidual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter?.trendResidual : null,
+        directionReversals: smootherEnabled && smoothedFrame ? smoothedFrame.jitter?.directionReversals : 0,
         validLandmarks: analyzerValid
       };
     const analysisActive = !isForwardPress || (packetCalibrationComplete && routineStartedRef.current);
     const analyzerOutput = analysisActive
       ? analyzerRef.current.analyze(analyzerFrame)
       : analyzerRef.current.preview(analyzerFrame);
+    lastAnalyzerPhaseRef.current = analyzerOutput?.phase ?? lastAnalyzerPhaseRef.current;
     // Framing cues override coach message when arm is not well-positioned in frame.
     // Only override during waiting/pre-rep phases so it doesn't interrupt mid-rep.
     const preRepPhases = new Set(["WAITING_FOR_TRACKING", "MOVE_TO_BENT", "START_BENT_HOLD", "START_BENT_READY"]);
@@ -821,8 +834,8 @@ export default function BrowserPoseOverlay({
         ).toFixed(3)
       ),
       jitter_detected: isForwardPress
-        ? validAnalysis && Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0) > 0.65
-        : analyzerValid && (combinedJitter > 0.45 || (smoothedFrame?.jitter?.peakJitterScore ?? 0) > 0.7),
+        ? validAnalysis && Boolean(smoothedFrame?.jitter?.jitterGroupedEvent)
+        : analyzerValid && Boolean(smoothedFrame?.jitter?.jitterGroupedEvent),
       shoulder_angle: analyzerValid && analyzerShoulderAngle != null
         ? Number(analyzerShoulderAngle.toFixed(1))
         : (validAnalysis ? Number(upperArmAngle.toFixed(1)) : null),
@@ -843,6 +856,16 @@ export default function BrowserPoseOverlay({
       smoothing_jitter_score: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.cameraJitterScore : null,
       angle_residual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.angleResidual : null,
       velocity_residual_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.velocityResidualDegPerSec : null,
+      jitter_event: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter.jitterGroupedEvent) : false,
+      jitter_grouped_event: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter.jitterGroupedEvent) : false,
+      jitter_reason: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.jitterReason : null,
+      predicted_trend_angle: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.predictedTrendAngle : null,
+      trend_residual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.trendResidual : null,
+      frame_delta: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.frameDelta : null,
+      raw_smoothed_residual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.rawSmoothedResidual : null,
+      direction_reversals: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.directionReversals : null,
+      jitter_debug: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.debug : null,
+      tracking_noise: smootherEnabled && smoothedFrame ? Boolean(smoothedFrame.jitter.trackingNoise) : false,
       trend_direction: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowDirection : null,
       trend_velocity_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowVelocityDegPerSec : null,
       validity_status: smootherEnabled && smoothedFrame

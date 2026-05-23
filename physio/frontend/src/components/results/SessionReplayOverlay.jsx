@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { isInSessionEdgeTimestamp } from "../../analysis/smoothing/poseSignalSmoother.js";
 
 const CHART_WIDTH = 480;
 const CHART_HEIGHT = 140;
@@ -9,9 +10,9 @@ const INNER_H = CHART_HEIGHT - PAD_Y * 2;
 const ANGLE_MIN = 30;
 const ANGLE_MAX = 180;
 const JITTER_FLAG_THRESHOLD = 0.35;
+const MIN_EVENT_SPACING_MS = 320;
 
 function angleToY(angle) {
-  // Higher angle = arm more straight = lower on chart (y closer to bottom)
   const clamped = Math.max(ANGLE_MIN, Math.min(ANGLE_MAX, angle));
   return PAD_Y + ((ANGLE_MAX - clamped) / (ANGLE_MAX - ANGLE_MIN)) * INNER_H;
 }
@@ -21,25 +22,25 @@ function timeToX(ms, startMs, totalMs) {
   return PAD_X + ((ms - startMs) / totalMs) * INNER_W;
 }
 
-const PHASE_COLORS = {
-  FLEXING: "#38bdf8",
-  FLEXED_HOLD: "#4ade80",
-  EXTENDING: "#fb923c",
-  REP_COMPLETE: "#a78bfa",
-  SESSION_COMPLETE: "#f472b6",
-  EXTENDED_READY: "#94a3b8",
-  WAITING_FOR_START: "#475569",
-};
+function groupJitterMarkers(samples, startMs, endMs) {
+  const markers = [];
+  let lastMarkerMs = -Infinity;
+  for (const sample of samples) {
+    const flagged = Boolean(sample.jitter_grouped_event ?? sample.jitter_event);
+    if (!flagged) continue;
+    if (isInSessionEdgeTimestamp(sample.timestampMs, startMs, endMs)) continue;
+    if (sample.timestampMs - lastMarkerMs < MIN_EVENT_SPACING_MS) continue;
+    lastMarkerMs = sample.timestampMs;
+    markers.push({
+      x: sample.timestampMs,
+      y: sample.raw_elbow_angle ?? sample.smoothed_elbow_angle,
+      score: sample.camera_jitter_score ?? sample.jitter_score ?? 0.5,
+      reason: sample.jitter_reason ?? sample.jitter_debug?.reason ?? null
+    });
+  }
+  return markers;
+}
 
-/**
- * SessionReplayOverlay
- *
- * Simple SVG chart showing:
- *   - Elbow angle over time (smoothed line)
- *   - Phase color bands
- *   - Rep completion markers
- *   - Tracking-lost markers
- */
 export default function SessionReplayOverlay({ samples = [], reps = [] }) {
   const validSamples = useMemo(
     () =>
@@ -64,20 +65,33 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
   const endMs = validSamples[validSamples.length - 1].timestampMs;
   const totalMs = Math.max(endMs - startMs, 1);
 
-  // Build SVG path for smoothed angle
+  const groupedMarkers = groupJitterMarkers(validSamples, startMs, endMs);
+  const jitterPoints = groupedMarkers.map((point) => ({
+    x: timeToX(point.x, startMs, totalMs),
+    y: angleToY(point.y),
+    score: point.score,
+    reason: point.reason
+  }));
+
+  const jitterValues = validSamples
+    .filter((sample) => !isInSessionEdgeTimestamp(sample.timestampMs, startMs, endMs))
+    .map((s) => s.camera_jitter_score ?? s.jitter_score)
+    .filter(Number.isFinite);
+  const jitterEventCount = groupedMarkers.length;
+  const avgJitter = jitterValues.length
+    ? jitterValues.reduce((sum, value) => sum + value, 0) / jitterValues.length
+    : 0;
+
   const smoothedPoints = validSamples
     .filter((s) => s.smoothed_elbow_angle != null)
     .map((s) => `${timeToX(s.timestampMs, startMs, totalMs).toFixed(1)},${angleToY(s.smoothed_elbow_angle).toFixed(1)}`);
-
   const smoothedPath = smoothedPoints.length > 1 ? `M ${smoothedPoints.join(" L ")}` : null;
 
-  // Raw angle path (faint)
   const rawPoints = validSamples
     .filter((s) => s.raw_elbow_angle != null)
     .map((s) => `${timeToX(s.timestampMs, startMs, totalMs).toFixed(1)},${angleToY(s.raw_elbow_angle).toFixed(1)}`);
   const rawPath = rawPoints.length > 1 ? `M ${rawPoints.join(" L ")}` : null;
 
-  // Rep marker x positions
   const repMarkers = (reps || []).map((rep) => {
     const t = rep.end_timestamp || rep.start_timestamp;
     if (!t) return null;
@@ -85,21 +99,6 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
     return { x, rep_number: rep.rep_number ?? rep.rep_index, score: rep.physio_score, clean: rep.clean };
   }).filter(Boolean);
 
-  const jitterPoints = validSamples
-    .filter((s) => (s.camera_jitter_score ?? s.jitter_score ?? 0) >= JITTER_FLAG_THRESHOLD)
-    .map((s) => ({
-      x: timeToX(s.timestampMs, startMs, totalMs),
-      y: angleToY(s.smoothed_elbow_angle ?? s.raw_elbow_angle),
-      score: s.camera_jitter_score ?? s.jitter_score
-    }));
-  const jitterValues = validSamples
-    .map((s) => s.camera_jitter_score ?? s.jitter_score)
-    .filter(Number.isFinite);
-  const avgJitter = jitterValues.length
-    ? jitterValues.reduce((sum, value) => sum + value, 0) / jitterValues.length
-    : 0;
-
-  // Tracking-lost segments
   const lostSegments = [];
   let lostStart = null;
   for (const s of validSamples) {
@@ -114,7 +113,6 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
     lostSegments.push({ x1: timeToX(lostStart, startMs, totalMs), x2: PAD_X + INNER_W });
   }
 
-  // Y-axis labels
   const yLabels = [180, 135, 90, 45];
 
   return (
@@ -134,7 +132,6 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
         className="replay-svg"
         style={{ display: "block", maxWidth: CHART_WIDTH }}
       >
-        {/* Grid lines */}
         {yLabels.map((deg) => {
           const y = angleToY(deg);
           return (
@@ -145,7 +142,6 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
           );
         })}
 
-        {/* Tracking-lost shading */}
         {lostSegments.map((seg, i) => (
           <rect
             key={i}
@@ -157,12 +153,10 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
           />
         ))}
 
-        {/* Raw angle line (faint) */}
         {rawPath && (
           <path d={rawPath} fill="none" stroke="#94a3b8" strokeWidth="0.8" strokeOpacity="0.4" />
         )}
 
-        {/* Smoothed angle line */}
         {smoothedPath && (
           <path d={smoothedPath} fill="none" stroke="#38bdf8" strokeWidth="1.5" />
         )}
@@ -172,13 +166,12 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
             key={`${point.x}-${index}`}
             cx={point.x}
             cy={point.y}
-            r={2 + Math.min(point.score * 4, 4)}
+            r={3}
             fill="#ef4444"
-            fillOpacity="0.55"
+            fillOpacity="0.7"
           />
         ))}
 
-        {/* Rep markers */}
         {repMarkers.map((m) => (
           <g key={m.rep_number}>
             <line x1={m.x} y1={PAD_Y} x2={m.x} y2={PAD_Y + INNER_H} stroke={m.clean ? "#4ade80" : "#fb923c"} strokeWidth="1" strokeDasharray="2,2" />
@@ -188,7 +181,6 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
           </g>
         ))}
 
-        {/* Axes */}
         <line x1={PAD_X} y1={PAD_Y} x2={PAD_X} y2={PAD_Y + INNER_H} stroke="#475569" strokeWidth="1" />
         <line x1={PAD_X} y1={PAD_Y + INNER_H} x2={PAD_X + INNER_W} y2={PAD_Y + INNER_H} stroke="#475569" strokeWidth="1" />
       </svg>
@@ -197,6 +189,7 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
         <div className={`rep-chip ${avgJitter >= JITTER_FLAG_THRESHOLD ? "rep-chip--flagged" : "rep-chip--clean"}`}>
           <span>Avg jitter</span>
           <span className="rep-score">{avgJitter.toFixed(2)}</span>
+          {jitterEventCount > 0 && <span>{jitterEventCount} events</span>}
         </div>
         {(reps || []).map((rep) => (
           (() => {
@@ -212,6 +205,9 @@ export default function SessionReplayOverlay({ samples = [], reps = [] }) {
             <span>Rep {rep.rep_number ?? rep.rep_index}</span>
             {rep.physio_score != null && <span className="rep-score">{rep.physio_score}</span>}
             {Number.isFinite(rep.jitter_score) && <span>jitter {rep.jitter_score.toFixed(2)}</span>}
+            {Number.isFinite(rep.jitter_count) && rep.jitter_count > 0 && (
+              <span>{rep.jitter_count} jitters</span>
+            )}
             {visibleIssue && visibleIssue !== "none" && (
               <span className="rep-issue">{visibleIssue.replace(/_/g, " ")}</span>
             )}

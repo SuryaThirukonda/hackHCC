@@ -1,4 +1,5 @@
 import { ZERO_REP_REASONS } from "./sessionAnalysisTypes.js";
+import { isInSessionEdgeTimestamp } from "../smoothing/poseSignalSmoother.js";
 
 function average(values) {
   if (!values.length) return null;
@@ -143,8 +144,17 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
   const endedAt = new Date();
   const startedAt = runner?.startedAt ? new Date(runner.startedAt) : endedAt;
   const durationSec = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
+  const sessionStartMs = packets[0]?.timestamp_ms ?? packets[0]?.timestampMs ?? startedAt.getTime();
+  const sessionEndMs = packets.at(-1)?.timestamp_ms ?? packets.at(-1)?.timestampMs ?? endedAt.getTime();
+  const jitterEvents = packets.filter((packet) => {
+    if (!(packet?.jitter_grouped_event ?? packet?.jitter_event)) return false;
+    const timestampMs = packet.timestamp_ms ?? packet.timestampMs;
+    return !isInSessionEdgeTimestamp(timestampMs, sessionStartMs, sessionEndMs);
+  });
+  const totalJitterEvents = jitterEvents.length;
+  const averageJitterScore = round(average(jitterValues) ?? 0, 2);
   const validFrameRatio = packets.length ? validPackets.length / packets.length : 0;
-  const dataQuality = validFrameRatio >= 0.8 && (average(jitterValues) ?? 1) < 0.35
+  const dataQuality = validFrameRatio >= 0.8 && averageJitterScore < 0.35
     ? "high"
     : validFrameRatio >= 0.55
       ? "medium"
@@ -176,7 +186,8 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
     average_rep_duration_sec: round(average(durationValues) ?? 0, 1),
     average_physio_score: Math.round(average(scoreValues) ?? 0),
     max_jitter_score: round(Math.max(...jitterValues, 0), 2),
-    average_jitter_score: round(average(jitterValues) ?? 0, 2),
+    average_jitter_score: averageJitterScore,
+    total_jitter_events: totalJitterEvents,
     raw_average_elbow_angle: round(average(rawElbows), 1),
     smoothed_average_elbow_angle: round(average(smoothedElbows), 1),
     raw_average_shoulder_angle: round(average(rawShoulders), 1),
@@ -193,7 +204,8 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
       invalid_frames: Math.max(0, packets.length - validPackets.length),
       valid_frame_ratio: round(validFrameRatio, 2),
       average_landmark_confidence: round(average(confidenceValues) ?? 0, 3),
-      average_jitter_score: round(average(jitterValues) ?? 0, 2)
+      average_jitter_score: averageJitterScore,
+      total_jitter_events: totalJitterEvents
     },
     movement_trace: buildLowFrameRateTrace(packets),
     trace_summary: {
@@ -202,7 +214,8 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
       average_angle_residual: round(average(residualValues) ?? 0, 2),
       max_angle_residual: round(Math.max(...residualValues, 0), 1),
       average_velocity_residual_deg_per_sec: round(average(velocityResidualValues) ?? 0, 1),
-      high_jitter_frame_count: jitterValues.filter((value) => value >= (exercise?.jitterThreshold ?? 0.35)).length
+      high_jitter_frame_count: jitterValues.filter((value) => value >= (exercise?.jitterThreshold ?? 0.35)).length,
+      jitter_event_count: totalJitterEvents
     },
     completed_reps: reps,
     summary_text: reps.length
