@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Database, Pause, Play, Power, Square, Video } from "lucide-react";
-=======
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -18,17 +14,26 @@ import {
   Square,
   Video
 } from "lucide-react";
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 import {
   endSession,
   getCoachCue,
+  getCoachProviderStatus,
   getHealth,
   getLatestPacket,
   getLiveSource,
-  getCoachWebSocketUrl,
+  getSessionResults,
   getSessions,
+  saveSessionResult,
   startSession
 } from "./api/client.js";
+import { buildPhysioAIPacket } from "./ai/buildPhysioAIPacket.js";
+import { buildSessionHealthPacket } from "./ai/buildSessionHealthPacket.js";
+import {
+  resolveOverlayCoachMessage,
+  resolveSpokenCoachCue
+} from "./ai/coachVoiceScript.js";
+import { generateSessionSummary as generateAISessionSummary } from "./ai/geminiCoachClient.js";
+import { speakCoachCue } from "./ai/elevenLabsClient.js";
 import CoachPanel from "./components/CoachPanel.jsx";
 import CountdownOverlay from "./components/CountdownOverlay.jsx";
 import ExercisePreview from "./components/ExercisePreview.jsx";
@@ -54,6 +59,16 @@ const navItems = [
 ];
 
 const LOCAL_SESSION_HISTORY_KEY = "physio_elbow_completed_sessions";
+const VOICE_MIN_GAP_MS = 4500;
+const IMPORTANT_VOICE_STATES = new Set([
+  "too_fast",
+  "too_jittery",
+  "rep_complete",
+  "session_complete",
+  "straighten_more",
+  "bend_more",
+  "hold_longer"
+]);
 
 function initialSourceMode() {
   const requested = new URLSearchParams(window.location.search).get("source");
@@ -68,6 +83,7 @@ export default function App() {
   const [packet, setPacket] = useState(null);
   const [cue, setCue] = useState(null);
   const [sessions, setSessions] = useState([]);
+  const [sessionResults, setSessionResults] = useState([]);
   const [localSessions, setLocalSessions] = useState(() => loadLocalSessionHistory());
   const [summary, setSummary] = useState(null);
   const [sessionId, setSessionId] = useState(null);
@@ -77,16 +93,33 @@ export default function App() {
   const [frameTick, setFrameTick] = useState(Date.now());
   const [health, setHealth] = useState("checking");
   const [error, setError] = useState("");
-<<<<<<< HEAD
-  const coachSocketRef = useRef(null);
-=======
   const [runner, dispatchRunner] = useReducer(
     exerciseRunnerReducer,
     createInitialExerciseRunnerState(defaultExercise)
   );
   const [countdownValue, setCountdownValue] = useState(null);
   const sessionStartTokenRef = useRef(0);
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
+  const sessionVoicePrimedRef = useRef(false);
+  const [aiCue, setAiCue] = useState({
+    text: "",
+    status: "idle",
+    source: "local",
+    error: "",
+    lastCoachState: "",
+    lastRepCount: 0
+  });
+  const [aiSummaryText, setAiSummaryText] = useState("");
+  const [aiHealthReport, setAiHealthReport] = useState("");
+  const [latestAiPacket, setLatestAiPacket] = useState(null);
+  const [providerStatus, setProviderStatus] = useState(null);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("idle");
+  const [voiceError, setVoiceError] = useState("");
+  const [bonusRepRequested, setBonusRepRequested] = useState(false);
+  const voiceThrottleRef = useRef({ lastSpeakAt: 0, lastText: "", lastPhase: "" });
+  const audioRef = useRef(null);
+  const pendingAudioRef = useRef(null); // queued URL to play once current clip ends
 
   useEffect(() => {
     getHealth()
@@ -96,42 +129,17 @@ export default function App() {
     getLiveSource()
       .then((status) => setSourceStatus(status))
       .catch(() => {});
+    getCoachProviderStatus()
+      .then((status) => setProviderStatus(status))
+      .catch((err) => setProviderStatus({ error: err.message }));
   }, []);
 
+  // Reload session data from DB whenever user switches to the results tab
   useEffect(() => {
-<<<<<<< HEAD
-    if (!live) return undefined;
-    const socket = new WebSocket(getCoachWebSocketUrl());
-    coachSocketRef.current = socket;
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type !== "error") setCue(data);
-    };
-    socket.onclose = () => {
-      if (coachSocketRef.current === socket) coachSocketRef.current = null;
-    };
-    socket.onerror = () => {
-      if (coachSocketRef.current === socket) coachSocketRef.current = null;
-    };
-    return () => {
-      if (coachSocketRef.current === socket) coachSocketRef.current = null;
-      socket.close();
-    };
-  }, [live]);
-
-  const requestCoachCue = useCallback(async (nextPacket) => {
-    const socket = coachSocketRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(nextPacket));
-      return;
-    }
-    const nextCue = await getCoachCue(nextPacket);
-    setCue(nextCue);
-  }, []);
+    if (activeTab === "results") refreshSessions();
+  }, [activeTab]);
 
   useEffect(() => {
-    if (!live) return undefined;
-=======
     const id = window.setInterval(() => {
       getLiveSource()
         .then((status) => {
@@ -151,7 +159,6 @@ export default function App() {
 
   useEffect(() => {
     if (!live || sourceMode === "browser") return undefined;
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
     let cancelled = false;
 
     const tick = async () => {
@@ -160,20 +167,9 @@ export default function App() {
         if (cancelled) return;
         setPacket(nextPacket);
         setError("");
-<<<<<<< HEAD
-        getLiveSource().then((status) => {
-          if (!cancelled) setSourceStatus(status);
-        }).catch(() => {});
-        if (nextPacket.device_id === "opencv-waiting") {
-          setCue(null);
-          return;
-        }
-        await requestCoachCue(nextPacket);
-=======
         if (sourceMode === "python") setFrameTick(Date.now());
         const nextCue = await getCoachCue(nextPacket);
         if (!cancelled) setCue(nextCue);
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
       } catch (err) {
         if (!cancelled) {
           const expectedPythonOffline =
@@ -191,9 +187,6 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-<<<<<<< HEAD
-  }, [live, dataSource, requestCoachCue]);
-=======
   }, [live, sourceMode]);
 
   const sessionLabel = useMemo(() => sessionId || packet?.session_id || "local-webcam-session", [packet, sessionId]);
@@ -220,7 +213,6 @@ export default function App() {
 
     return () => window.clearInterval(id);
   }, [runner.status]);
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
   const handleBrowserPacket = useCallback(async (nextPacket) => {
     if (sourceMode !== "browser") return;
@@ -234,23 +226,129 @@ export default function App() {
         completedRep: nextPacket.completed_rep || null
       });
     }
-    try {
-      await requestCoachCue(nextPacket);
-    } catch {
-      setCue(null);
-    }
-<<<<<<< HEAD
-  }, [requestCoachCue]);
-=======
+    setCue({
+      message: nextPacket.local_coach_message,
+      source: "local",
+      voice_status: "idle",
+      avatar_status: "disabled",
+      should_speak: false,
+      reason: "local_browser_packet"
+    });
   }, [runner.status, sourceMode]);
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
+
+  useEffect(() => {
+    if (runner.status !== RUNNER_STATES.ACTIVE) return;
+    const analyzerOutput = packet?.analyzer_output || runner.latestAnalyzerOutput;
+    if (!packet && !analyzerOutput) return;
+
+    const aiPacket = buildPhysioAIPacket({
+      exercise: selectedExercise,
+      analyzerOutput,
+      packet,
+      mode: "live_coaching"
+    });
+    setLatestAiPacket(aiPacket);
+
+    const spoken = resolveSpokenCoachCue({ aiCue: null, packet, analyzerOutput });
+    setAiCue({
+      text: spoken.text,
+      status: "ready",
+      source: spoken.source,
+      error: "",
+      lastCoachState: aiPacket.coach_state,
+      lastRepCount: aiPacket.rep_count,
+      lastPhase: aiPacket.phase
+    });
+  }, [packet, runner.latestAnalyzerOutput, runner.status, selectedExercise]);
+
+  useEffect(() => {
+    if (runner.status !== RUNNER_STATES.ACTIVE) return undefined;
+    const analyzerOutput = packet?.analyzer_output || runner.latestAnalyzerOutput;
+    const spoken = resolveSpokenCoachCue({ aiCue, packet, analyzerOutput });
+    const text = spoken.text;
+    const coachState = aiCue.lastCoachState || packet?.coach_state;
+    const phase = analyzerOutput?.phase || aiCue.lastPhase;
+    if (!voiceEnabled || voiceMuted || !text) return undefined;
+    const now = Date.now();
+    const phaseChanged = phase && phase !== voiceThrottleRef.current.lastPhase;
+    if (phaseChanged) voiceThrottleRef.current.lastText = "";
+    const shouldSpeak =
+      phaseChanged ||
+      repCompletedVoice(coachState, aiCue) ||
+      IMPORTANT_VOICE_STATES.has(coachState) ||
+      now - voiceThrottleRef.current.lastSpeakAt >= VOICE_MIN_GAP_MS;
+    if (!shouldSpeak || voiceThrottleRef.current.lastText === text) return undefined;
+
+    voiceThrottleRef.current = { lastSpeakAt: now, lastText: text, lastPhase: phase };
+    setVoiceStatus("loading");
+    setVoiceError("");
+    speakCoachCue(text)
+      .then(async (result) => {
+        if (!result.audio_url) {
+          setVoiceStatus(result.status || "unavailable");
+          if (result.error) setVoiceError(result.error);
+          return;
+        }
+
+        const playUrl = (url) => {
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = () => {
+            const next = pendingAudioRef.current;
+            if (next) {
+              pendingAudioRef.current = null;
+              playUrl(next);
+              setVoiceStatus("playing");
+            } else {
+              setVoiceStatus("idle");
+            }
+          };
+          audio.play().then(() => {
+            setVoiceStatus(result.status || "playing");
+          }).catch(() => {
+            setVoiceStatus("blocked");
+            setVoiceError("Click Speak AI cues to enable browser audio.");
+          });
+        };
+
+        // If audio is currently mid-playback, queue the new URL (latest wins)
+        if (audioRef.current && !audioRef.current.paused && !audioRef.current.ended) {
+          pendingAudioRef.current = result.audio_url;
+        } else {
+          audioRef.current = null;
+          pendingAudioRef.current = null;
+          playUrl(result.audio_url);
+        }
+      })
+      .catch((err) => {
+        setVoiceStatus("error");
+        setVoiceError(err.message);
+      });
+  }, [aiCue, packet, runner.latestAnalyzerOutput, runner.status, voiceEnabled, voiceMuted]);
+
+  useEffect(() => {
+    if (runner.status === RUNNER_STATES.ACTIVE && !sessionVoicePrimedRef.current) {
+      sessionVoicePrimedRef.current = true;
+      setVoiceEnabled(true);
+    }
+    if (runner.status === RUNNER_STATES.SELECTED || runner.status === RUNNER_STATES.IDLE) {
+      sessionVoicePrimedRef.current = false;
+    }
+  }, [runner.status]);
+
+  const overlayCoachMessage = useMemo(() => {
+    const analyzerOutput = packet?.analyzer_output || runner.latestAnalyzerOutput;
+    return resolveOverlayCoachMessage({ aiCue, packet, analyzerOutput });
+  }, [aiCue, packet, runner.latestAnalyzerOutput]);
 
   async function refreshSessions() {
-    try {
-      setSessions(await getSessions());
-    } catch {
-      setSessions([]);
-    }
+    // Fetch both; let each fail independently so a 404 from one doesn't kill both
+    const [basicResult, richResult] = await Promise.allSettled([
+      getSessions(),
+      getSessionResults()
+    ]);
+    if (basicResult.status === "fulfilled") setSessions(basicResult.value);
+    if (richResult.status === "fulfilled") setSessionResults(richResult.value);
   }
 
   async function beginExercise() {
@@ -266,6 +364,7 @@ export default function App() {
     setPacket(null);
     setCue(null);
     setError("");
+    setBonusRepRequested(false);
     setLive(true);
     setActiveTab("live");
     dispatchRunner({
@@ -304,9 +403,31 @@ export default function App() {
       saveLocalSessionHistory(next);
       return next;
     });
+    // Persist the full rich summary (with completed_reps) to SQLite immediately
+    saveSessionResult(localSummary).catch(() => {});
     setSessionId(null);
     setActiveTab("results");
     dispatchRunner({ type: RUNNER_EVENTS.END_SESSION });
+    setAiSummaryText(localSummary.recommendation_text);
+    setAiHealthReport("");
+    const healthPacket = {
+      ...localSummary,
+      ...buildSessionHealthPacket(localSummary)
+    };
+    generateAISessionSummary(healthPacket)
+      .then((result) => {
+        const summaryText = result.text || localSummary.recommendation_text;
+        setAiSummaryText(summaryText);
+        setAiHealthReport(result.health_report || "");
+        if (summaryText) {
+          speakCoachCue(summaryText).catch(() => {});
+        }
+      })
+      .catch((err) => {
+        setAiSummaryText(localSummary.recommendation_text);
+        setAiHealthReport("");
+        setAiCue((current) => ({ ...current, error: err.message }));
+      });
     try {
       await endSession({
         session_id: activeSession,
@@ -439,11 +560,30 @@ export default function App() {
             runnerStatus={runner.status}
             completedReps={runner.completedReps}
             countdownValue={countdownValue}
+            aiCue={aiCue}
+            voiceEnabled={voiceEnabled}
+            voiceMuted={voiceMuted}
+            voiceStatus={voiceStatus}
+            voiceError={voiceError}
+            overlayCoachMessage={overlayCoachMessage}
+            bonusRepRequested={bonusRepRequested}
+            onBonusRep={() => setBonusRepRequested(true)}
+            onEndSession={handleEnd}
+            onToggleVoiceEnabled={() => setVoiceEnabled((value) => !value)}
+            onToggleVoiceMuted={() => setVoiceMuted((value) => !value)}
           />
         )}
 
         {activeTab === "results" && (
-          <ResultsPage summary={summary} selectedExercise={selectedExercise} />
+          <ResultsPage
+            summary={summary}
+            selectedExercise={selectedExercise}
+            aiSummaryText={aiSummaryText}
+            aiHealthReport={aiHealthReport}
+            sessionResults={sessionResults}
+            sessions={sessions}
+            onRefresh={refreshSessions}
+          />
         )}
 
         {activeTab === "progress" && (
@@ -461,12 +601,21 @@ export default function App() {
             summary={summary}
             runner={runner}
             localSessions={localSessions}
+            latestAiPacket={latestAiPacket}
+            aiCue={aiCue}
+            voiceStatus={voiceStatus}
+            voiceError={voiceError}
+            providerStatus={providerStatus}
           />
         )}
         <footer className="footer-wordmark" aria-hidden="true">physio</footer>
       </section>
     </main>
   );
+}
+
+function repCompletedVoice(coachState, aiCue) {
+  return coachState === "rep_complete" || aiCue.lastCoachState === "rep_complete";
 }
 
 function loadLocalSessionHistory() {
@@ -550,9 +699,22 @@ function LiveSessionPage({
   onBrowserPacket,
   runnerStatus,
   completedReps,
-  countdownValue
+  countdownValue,
+  aiCue,
+  voiceEnabled,
+  voiceMuted,
+  voiceStatus,
+  voiceError,
+  overlayCoachMessage,
+  bonusRepRequested,
+  onBonusRep,
+  onEndSession,
+  onToggleVoiceEnabled,
+  onToggleVoiceMuted
 }) {
   const recordingActive = runnerStatus === RUNNER_STATES.ACTIVE;
+  const sessionComplete = packet?.coach_state === "session_complete" && runnerStatus === RUNNER_STATES.ACTIVE;
+  const showBonusBanner = sessionComplete && selectedExercise.bonusRepAvailable && !bonusRepRequested;
   const currentPhase = packet?.analyzer_phase_label || {
     idle: "Start straight",
     resting: "Ready",
@@ -564,6 +726,22 @@ function LiveSessionPage({
   return (
     <div className="live-session-layout">
       <CountdownOverlay value={countdownValue} variant="page" />
+      {showBonusBanner && (
+        <div className="bonus-rep-banner">
+          <div className="bonus-rep-content">
+            <strong>Great work! Session complete.</strong>
+            <p>If you feel comfortable, try one bonus rep.</p>
+            <div className="bonus-rep-actions">
+              <button type="button" className="bonus-rep-yes" onClick={onBonusRep}>
+                Try a bonus rep
+              </button>
+              <button type="button" className="bonus-rep-end" onClick={onEndSession}>
+                End session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <section className="live-session-main">
         <LiveSession
           packet={packet}
@@ -576,16 +754,29 @@ function LiveSessionPage({
           exercise={selectedExercise}
           exerciseTitle={selectedExercise.name}
           recordingActive={recordingActive}
+          overlayCoachMessage={overlayCoachMessage}
+          bonusRepRequested={bonusRepRequested}
         />
       </section>
       <aside className="session-side">
-        <CoachPanel packet={packet} cue={cue} />
+        <CoachPanel
+          packet={packet}
+          cue={cue}
+          aiCue={aiCue}
+          overlayCoachMessage={overlayCoachMessage}
+          voiceEnabled={voiceEnabled}
+          voiceMuted={voiceMuted}
+          voiceStatus={voiceStatus}
+          voiceError={voiceError}
+          onToggleVoiceEnabled={onToggleVoiceEnabled}
+          onToggleVoiceMuted={onToggleVoiceMuted}
+        />
         <section className="session-status-card">
           <p className="eyebrow">Session status</p>
           <h2>{selectedExercise.name}</h2>
           <div className="status-list">
             <span>Source <strong>Live Webcam Analysis</strong></span>
-            <span>Reps completed <strong>{packet?.rep_count ?? completedReps.length}/{selectedExercise.repGoal}</strong></span>
+            <span>Reps completed <strong>{packet?.rep_count ?? completedReps.length}/{bonusRepRequested ? selectedExercise.repGoal + 1 : selectedExercise.repGoal}</strong></span>
             <span>Runner <strong>{runnerStatus}</strong></span>
             <span>Phase <strong>{currentPhase}</strong></span>
             <span>Confidence <strong>{packet ? packet.landmark_confidence.toFixed(3) : "--"}</strong></span>
@@ -620,20 +811,248 @@ function RepTimingPanel({ reps = [] }) {
   );
 }
 
-function ResultsPage({ summary, selectedExercise }) {
-  if (!summary) {
-    return (
-      <section className="empty-state">
-        <FileText size={34} />
-        <h2>No completed session yet.</h2>
-        <p>Run {selectedExercise.name} and end the session to see a local summary here.</p>
-      </section>
-    );
+function ResultsPage({ summary, selectedExercise, aiSummaryText, aiHealthReport, sessionResults, sessions, onRefresh }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // sessionResults has full per-rep data; fall back to basic sessions if empty
+  const dbRows = sessionResults.length > 0 ? sessionResults : sessions;
+
+  // The just-completed session always goes first if present; otherwise use DB order
+  const allResults = summary
+    ? [summary, ...dbRows.filter((r) => r.session_id !== summary.session_id)]
+    : dbRows;
+
+  const featuredSession = allResults[0] || null;
+  const historyRows = allResults.slice(1);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try { await onRefresh(); } catch { /* ignore */ }
+    setRefreshing(false);
   }
-  return <SessionSummary summary={summary} />;
+
+  return (
+    <div className="results-page">
+      <div className="results-page-header">
+        <div>
+          <p className="eyebrow">Physical Therapy Demo</p>
+          <h1>Session results</h1>
+          <p className="muted-sub">All completed sessions stored in the database.</p>
+        </div>
+        <button
+          type="button"
+          className="refresh-btn"
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          <RefreshIcon spinning={refreshing} />
+          {refreshing ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+
+      {!featuredSession ? (
+        <section className="empty-state">
+          <FileText size={34} />
+          <h2>No completed sessions yet.</h2>
+          <p>Run {selectedExercise?.name || "an exercise"} and end the session to see results here.</p>
+        </section>
+      ) : (
+        <>
+          <SessionSummary
+            summary={featuredSession}
+            aiSummaryText={featuredSession.session_id === summary?.session_id ? aiSummaryText : ""}
+            aiHealthReport={featuredSession.session_id === summary?.session_id ? aiHealthReport : ""}
+          />
+
+          {historyRows.length > 0 && (
+            <section className="session-history">
+              <div className="session-history-heading">
+                <p className="eyebrow">Session history</p>
+                <span className="history-count">{historyRows.length} previous {historyRows.length === 1 ? "session" : "sessions"}</span>
+              </div>
+              <div className="history-list">
+                {historyRows.map((sess) => (
+                  <HistoryCard
+                    key={sess.session_id}
+                    session={sess}
+                    expanded={expandedId === sess.session_id}
+                    onToggle={() => setExpandedId(expandedId === sess.session_id ? null : sess.session_id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
-function DebugPage({ packet, health, sourceMode, setSourceMode, sourceStatus, sessions, summary, runner, localSessions }) {
+function HistoryCard({ session, expanded, onToggle }) {
+  const date = session.ended_at_ms
+    ? new Date(session.ended_at_ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    : "—";
+  const time = session.ended_at_ms
+    ? new Date(session.ended_at_ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : "";
+
+  const bestRom = session.best_range_of_motion ?? session.best_angle;
+  const avgRom = session.average_range_of_motion ?? session.average_angle;
+
+  return (
+    <div className={`history-card${expanded ? " history-card--open" : ""}`}>
+      <button type="button" className="history-card-row" onClick={onToggle}>
+        <div className="history-card-date">
+          <span className="history-date-main">{date}</span>
+          <span className="history-date-time">{time}</span>
+        </div>
+        <div className="history-card-exercise">{exerciseLabelShort(session.exercise)}</div>
+        <div className="history-card-stat">
+          <span className="hstat-value">{session.total_reps ?? "—"}</span>
+          <span className="hstat-label">reps</span>
+        </div>
+        <div className="history-card-stat">
+          <span className="hstat-value">{Number.isFinite(bestRom) ? bestRom.toFixed(0) : "—"}</span>
+          <span className="hstat-label">best ROM°</span>
+        </div>
+        <div className="history-card-stat">
+          <span className="hstat-value">{session.average_physio_score ?? "—"}</span>
+          <span className="hstat-label">score</span>
+        </div>
+        <div className="history-card-stat">
+          <span className="hstat-value">{session.duration_sec ?? "—"}</span>
+          <span className="hstat-label">sec</span>
+        </div>
+        <span className="history-chevron">{expanded ? "▲" : "▼"}</span>
+      </button>
+
+      {expanded && (
+        <div className="history-card-detail">
+          {/* recommendation blurb */}
+          {session.recommendation_text && (
+            <p className="hdetail-blurb">{session.recommendation_text}</p>
+          )}
+
+          {/* wide stat grid */}
+          <div className="hdetail-stat-grid">
+            <div className="hdetail-stat">
+              <span className="hds-label">Exercise</span>
+              <span className="hds-value">{exerciseLabelShort(session.exercise)}</span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Duration</span>
+              <span className="hds-value">{session.duration_sec ?? "—"}<small> s</small></span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Total reps</span>
+              <span className="hds-value">{session.total_reps ?? "—"}</span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Clean reps</span>
+              <span className="hds-value">{session.clean_reps ?? "—"}</span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Best ROM</span>
+              <span className="hds-value">{Number.isFinite(bestRom) ? bestRom.toFixed(1) : "—"}<small>°</small></span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Avg ROM</span>
+              <span className="hds-value">{Number.isFinite(avgRom) ? avgRom.toFixed(1) : "—"}<small>°</small></span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Avg hold</span>
+              <span className="hds-value">{Number.isFinite(session.average_hold_time_sec) ? session.average_hold_time_sec.toFixed(1) : "—"}<small> s</small></span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Score</span>
+              <span className="hds-value">{session.average_physio_score ?? "—"}</span>
+            </div>
+            <div className="hdetail-stat">
+              <span className="hds-label">Avg jitter</span>
+              <span className="hds-value">{Number.isFinite(session.average_jitter_score) ? session.average_jitter_score.toFixed(2) : "—"}</span>
+            </div>
+          </div>
+
+          {/* rep-by-rep table */}
+          {Array.isArray(session.completed_reps) && session.completed_reps.length > 0 && (
+            <div className="hdetail-reps">
+              <p className="eyebrow hdetail-reps-heading">Rep-by-rep breakdown</p>
+              <div className="hdetail-rep-table">
+                <span className="hdr-head">Rep</span>
+                <span className="hdr-head">ROM°</span>
+                <span className="hdr-head">Hold</span>
+                <span className="hdr-head">Duration</span>
+                <span className="hdr-head">Score</span>
+                <span className="hdr-head">Pace</span>
+                <span className="hdr-head">Issue</span>
+                {session.completed_reps.map((rep) => (
+                  <React.Fragment key={rep.rep_index}>
+                    <span className="hdr-num">#{rep.rep_index}</span>
+                    <span>{Number.isFinite(rep.range_of_motion) ? rep.range_of_motion.toFixed(0) : "—"}</span>
+                    <span>{Number.isFinite(rep.hold_time_sec) ? `${rep.hold_time_sec.toFixed(1)}s` : "—"}</span>
+                    <span>{Number.isFinite(rep.rep_duration_sec) ? `${rep.rep_duration_sec.toFixed(1)}s` : "—"}</span>
+                    <span className={rep.physio_score >= 70 ? "hdr-good" : rep.physio_score >= 50 ? "hdr-ok" : "hdr-bad"}>{rep.physio_score ?? "—"}</span>
+                    <span>{rep.pace || "—"}</span>
+                    <span className={rep.issue === "none" ? "hdr-clean" : "hdr-issue"}>{issueShort(rep.issue)}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function issueShort(issue) {
+  return {
+    did_not_bend_enough: "bend deeper",
+    did_not_hold_long_enough: "hold longer",
+    moved_too_fast: "too fast",
+    too_jittery: "jittery",
+    shoulder_compensation: "arm drift",
+    low_confidence: "tracking",
+    none: "clean",
+  }[issue] ?? issue ?? "—";
+}
+
+function RefreshIcon({ spinning }) {
+  return (
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0, animation: spinning ? "spin 0.8s linear infinite" : "none" }}
+    >
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  );
+}
+
+function exerciseLabelShort(id) {
+  return id === "elbow_flexion_extension" ? "Elbow Flexion" : id || "—";
+}
+
+function DebugPage({
+  packet,
+  health,
+  sourceMode,
+  setSourceMode,
+  sourceStatus,
+  sessions,
+  summary,
+  runner,
+  localSessions,
+  latestAiPacket,
+  aiCue,
+  voiceStatus,
+  voiceError,
+  providerStatus
+}) {
   return (
     <div className="debug-layout">
       <section className="debug-card">
@@ -678,6 +1097,25 @@ function DebugPage({ packet, health, sourceMode, setSourceMode, sourceStatus, se
       <section className="debug-card debug-json">
         <p className="eyebrow">Latest analyzer output</p>
         <pre>{JSON.stringify(runner.latestAnalyzerOutput || packet?.analyzer_output || null, null, 2)}</pre>
+      </section>
+
+      <section className="debug-card debug-json">
+        <p className="eyebrow">Latest AI packet</p>
+        <pre>{JSON.stringify(latestAiPacket, null, 2)}</pre>
+      </section>
+
+      <section className="debug-card debug-json">
+        <p className="eyebrow">AI / voice status</p>
+        <pre>{JSON.stringify({
+          aiCue,
+          voiceStatus,
+          voiceError,
+          gemini_vertex: providerStatus?.gemini || null,
+          elevenlabs_key_present: Boolean(providerStatus?.env?.elevenlabs_key_configured),
+          elevenlabs_voice_present: Boolean(providerStatus?.env?.elevenlabs_voice_configured),
+          providers: providerStatus?.providers || null,
+          provider_error: providerStatus?.error || null
+        }, null, 2)}</pre>
       </section>
 
       <section className="debug-card debug-json">

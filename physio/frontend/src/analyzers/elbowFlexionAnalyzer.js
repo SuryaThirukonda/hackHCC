@@ -24,10 +24,10 @@ const DEFAULT_CONFIG = {
   requiredHoldSeconds: 1.0,
   minRepSeconds: 2.0,
   maxRepSeconds: 6.0,
-  minConfidence: 0.6,
+  minConfidence: 0.45,
   jitterWarning: 0.35,
   shoulderDriftWarning: 28,
-  transitionDebounceMs: 180,
+  transitionDebounceMs: 120,
   staleFrameMs: 1500
 };
 
@@ -101,6 +101,10 @@ export function createElbowFlexionAnalyzer(exercise) {
     repStartMs: null,
     holdStartMs: null,
     holdTimeSec: 0,
+    holdCompleted: false,
+    angularVelocity: 0,
+    lastAngle: null,
+    lastAngleMs: null,
     minElbowAngle: null,
     maxElbowAngle: null,
     startShoulderAngle: null,
@@ -119,6 +123,7 @@ export function createElbowFlexionAnalyzer(exercise) {
     state.repStartMs = timestampMs;
     state.holdStartMs = null;
     state.holdTimeSec = 0;
+    state.holdCompleted = false;
     state.minElbowAngle = null;
     state.maxElbowAngle = null;
     state.startShoulderAngle = null;
@@ -156,7 +161,33 @@ export function createElbowFlexionAnalyzer(exercise) {
   }
 
   function straightEnoughAngle() {
-    return Math.max(125, config.startElbowMin - 10);
+    return Math.max(115, config.startElbowMin - 30);
+  }
+
+  function primaryPhaseMessage(phase, elbowAngle) {
+    const straightEnough = straightEnoughAngle();
+    switch (phase) {
+      case "STRAIGHTEN_TO_START":
+        return "Straighten your arm to begin the set.";
+      case "WAITING_FOR_START":
+        if (elbowAngle < straightEnough) return "Extend your elbow a little more to start.";
+        return "Start with your arm mostly straight.";
+      case "EXTENDED_READY":
+        return "Bend your elbow slowly toward your shoulder.";
+      case "FLEXING":
+        return "Curl inward with steady control.";
+      case "FLEXED_HOLD":
+        if (state.holdCompleted) return "Now slowly extend your arm.";
+        return "Great. Hold it right there.";
+      case "EXTENDING":
+        return "Straighten your arm with control.";
+      case "REP_COMPLETE":
+        return "Good rep. Reset with your arm straight.";
+      case "SESSION_COMPLETE":
+        return COACH_MESSAGES.session_complete;
+      default:
+        return COACH_MESSAGES.good_form;
+    }
   }
 
   function normalizeFrame(frame = {}) {
@@ -260,9 +291,13 @@ export function createElbowFlexionAnalyzer(exercise) {
 
     if (!valid) {
       state.pendingTransition = null;
+      state.angularVelocity = 0;
+      state.lastAngle = null;
+      state.lastAngleMs = null;
       const output = makeOutput(normalizedFrame, {
         valid,
         coachState: "low_confidence",
+        coachMessage: COACH_MESSAGES.low_confidence,
         pace: "unknown",
         rangeOfMotion: 0,
         repDurationSec: state.lastRepDurationSec,
@@ -274,30 +309,57 @@ export function createElbowFlexionAnalyzer(exercise) {
 
     updateRepRange(elbowAngle, shoulderAngle);
 
+    // EMA angular velocity (degrees/sec, + = arm extending, - = arm flexing)
+    if (state.lastAngle != null && state.lastAngleMs != null) {
+      const dt = Math.max((timestampMs - state.lastAngleMs) / 1000, 0.001);
+      const instantVel = (elbowAngle - state.lastAngle) / dt;
+      state.angularVelocity = state.angularVelocity * 0.65 + instantVel * 0.35;
+    }
+    state.lastAngle = elbowAngle;
+    state.lastAngleMs = timestampMs;
+
     const straightEnough = straightEnoughAngle();
 
-    if (state.phase === "WAITING_FOR_START" && elbowAngle >= straightEnough) {
+    if (state.phase === "WAITING_FOR_START") {
+      if (elbowAngle >= straightEnough) {
+        if (acceptTransition("EXTENDED_READY", timestampMs)) {
+          resetRep(timestampMs);
+          updateRepRange(elbowAngle, shoulderAngle);
+        }
+      } else if (elbowAngle <= config.flexedElbowMax) {
+        if (acceptTransition("STRAIGHTEN_TO_START", timestampMs)) {
+          resetRep(timestampMs);
+          updateRepRange(elbowAngle, shoulderAngle);
+        }
+      }
+    } else if (state.phase === "STRAIGHTEN_TO_START" && elbowAngle >= straightEnough) {
       if (acceptTransition("EXTENDED_READY", timestampMs)) {
-        resetRep(timestampMs);
         updateRepRange(elbowAngle, shoulderAngle);
       }
-    } else if (state.phase === "EXTENDED_READY" && elbowAngle < straightEnough) {
+    } else if (state.phase === "EXTENDED_READY" && elbowAngle < straightEnough - 8) {
       if (acceptTransition("FLEXING", timestampMs)) {
         state.lastCompletedRep = null;
       }
     } else if (state.phase === "FLEXING" && elbowAngle <= config.flexedElbowMax) {
-      if (acceptTransition("FLEXED_HOLD", timestampMs)) {
-        state.holdStartMs = timestampMs;
-        state.holdTimeSec = 0;
+      // Wait until arm stops moving before entering hold (< 25°/sec = essentially stopped)
+      if (Math.abs(state.angularVelocity) < 25) {
+        if (acceptTransition("FLEXED_HOLD", timestampMs)) {
+          state.holdStartMs = timestampMs;
+          state.holdTimeSec = 0;
+        }
       }
     } else if (state.phase === "FLEXED_HOLD") {
       if (elbowAngle >= config.flexedElbowMin && elbowAngle <= config.flexedElbowMax) {
         state.holdTimeSec = state.holdStartMs ? (timestampMs - state.holdStartMs) / 1000 : 0;
+        if (!state.holdCompleted && state.holdTimeSec >= config.requiredHoldSeconds) {
+          state.holdCompleted = true;
+        }
       } else if (state.holdTimeSec >= config.requiredHoldSeconds && elbowAngle > config.flexedElbowMax) {
         acceptTransition("EXTENDING", timestampMs);
       } else if (elbowAngle > config.flexedElbowMax) {
         state.holdStartMs = null;
         state.holdTimeSec = 0;
+        state.holdCompleted = false;
         acceptTransition("FLEXING", timestampMs);
       }
     } else if (state.phase === "EXTENDING" && elbowAngle >= straightEnough) {
@@ -360,10 +422,15 @@ export function createElbowFlexionAnalyzer(exercise) {
       pace: completedRep?.pace || metrics.pace,
       repJustCompleted
     });
+    const phaseMessage = primaryPhaseMessage(state.phase, elbowAngle);
+    const coachMessage = repJustCompleted || coachState === "session_complete"
+      ? COACH_MESSAGES[coachState]
+      : (coachState === "good_form" ? phaseMessage : COACH_MESSAGES[coachState] || phaseMessage);
 
     const output = makeOutput(normalizedFrame, {
       valid,
       coachState,
+      coachMessage,
       pace: completedRep?.pace || metrics.pace,
       rangeOfMotion: completedRep?.range_of_motion ?? metrics.rangeOfMotion,
       repDurationSec: completedRep?.rep_duration_sec ?? metrics.repDurationSec,
@@ -374,14 +441,17 @@ export function createElbowFlexionAnalyzer(exercise) {
     return output;
   }
 
-  function makeOutput(frame, details) {
+  function makeOutput(frame, details = {}) {
     const timestampMs = frame.timestampMs ?? Date.now();
     const recentCompletedRep = details.completedRep ||
       (state.lastCompletedRep && timestampMs - state.lastRepCompletedAtMs <= 1400
         ? state.lastCompletedRep
         : null);
-    const displayCompletedRep = state.phase === "SESSION_COMPLETE" ? null : recentCompletedRep;
-    const displayPhase = displayCompletedRep ? "REP_COMPLETE" : state.phase;
+    const displayCompletedRep = recentCompletedRep;
+    const internalPhase = state.phase === "FLEXED_HOLD" && state.holdCompleted
+      ? "HOLD_COMPLETE"
+      : state.phase;
+    const displayPhase = displayCompletedRep ? "REP_COMPLETE" : internalPhase;
     const displayRange = displayCompletedRep?.range_of_motion ?? details.rangeOfMotion;
     const displayRepDuration = displayCompletedRep?.rep_duration_sec ?? details.repDurationSec;
     const displayHoldTime = displayCompletedRep?.hold_time_sec ?? state.holdTimeSec;
@@ -410,7 +480,7 @@ export function createElbowFlexionAnalyzer(exercise) {
       shoulder_drift: round(state.shoulderDrift, 1) || 0,
       coach_state: displayCoachState,
       physio_score: displayScore,
-      local_coach_message: COACH_MESSAGES[displayCoachState],
+      local_coach_message: details.coachMessage || COACH_MESSAGES[displayCoachState],
       current_rep: {
         min_elbow_angle: round(state.minElbowAngle, 1),
         max_elbow_angle: round(state.maxElbowAngle, 1),
@@ -460,14 +530,26 @@ export function createElbowFlexionAnalyzer(exercise) {
     state.lastCompletedRep = null;
     state.angleSamples = [];
     state.lastFrameTimestampMs = null;
+    state.angularVelocity = 0;
+    state.lastAngle = null;
+    state.lastAngleMs = null;
     resetRep(null);
     state.lastOutput = null;
+  }
+
+  function extendRepGoal(n) {
+    config.repGoal += n;
+    if (state.phase === "SESSION_COMPLETE") {
+      state.phase = "EXTENDED_READY";
+      resetRep(Date.now());
+    }
   }
 
   return {
     analyze,
     preview,
     reset,
+    extendRepGoal,
     getState: () => ({ ...state, completedReps: state.completedReps.slice() })
   };
 }

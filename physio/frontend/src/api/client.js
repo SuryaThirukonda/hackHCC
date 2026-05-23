@@ -55,6 +55,31 @@ export function getCoachCue(packet) {
   });
 }
 
+export function getCoachProviderStatus() {
+  return request("/api/coach/provider-status");
+}
+
+export function generateGeminiCoachCue(packet) {
+  return request("/api/ai/gemini-coach", {
+    method: "POST",
+    body: JSON.stringify({ mode: "live_coaching", packet })
+  });
+}
+
+export function generateGeminiSessionSummary(summary) {
+  return request("/api/ai/session-summary", {
+    method: "POST",
+    body: JSON.stringify({ summary })
+  });
+}
+
+export function generateElevenLabsSpeech(text) {
+  return request("/api/ai/elevenlabs-tts", {
+    method: "POST",
+    body: JSON.stringify({ text })
+  });
+}
+
 export function getCoachWebSocketUrl() {
   const url = new URL(API_BASE);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -68,6 +93,17 @@ export function endSession(payload) {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function saveSessionResult(summary) {
+  return request("/api/session/save-result", {
+    method: "POST",
+    body: JSON.stringify(summary)
+  });
+}
+
+export function getSessionResults() {
+  return request("/api/session/results");
 }
 
 export function getSessions() {

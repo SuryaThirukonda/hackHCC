@@ -1,21 +1,27 @@
-import { Bot, ExternalLink, Radio, Volume2 } from "lucide-react";
+import { Bot, Radio, Volume2, VolumeX } from "lucide-react";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
-
-function mediaUrl(path) {
-  if (!path) return null;
-  if (path.startsWith("http")) return path;
-  return `${API_BASE}${path}`;
+function sourceLabel(source) {
+  if (source === "phase_cue") return "phase cue";
+  if (source === "local_fallback") return "local";
+  if (source === "gemini_summary") return "AI summary";
+  return source || "local";
 }
 
-export default function CoachPanel({ packet, cue }) {
-<<<<<<< HEAD
-  const message = cue?.message || packet?.local_coach_message || "Start a mock session to receive coaching.";
-  const audioSrc = mediaUrl(cue?.audio_url);
-  const avatarSrc = mediaUrl(cue?.avatar_url);
-=======
-  const message = cue?.message || packet?.local_coach_message || "Begin a live session to receive movement cues.";
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
+export default function CoachPanel({
+  packet,
+  cue,
+  aiCue,
+  overlayCoachMessage = "",
+  voiceEnabled,
+  voiceMuted,
+  voiceStatus,
+  voiceError,
+  onToggleVoiceEnabled,
+  onToggleVoiceMuted
+}) {
+  const localMessage = packet?.local_coach_message || cue?.message || "Begin a live session to receive movement cues.";
+  const message = overlayCoachMessage || aiCue?.text || localMessage;
+  const cueSource = aiCue?.source || "local_fallback";
 
   return (
     <section className="coach-panel">
@@ -33,20 +39,30 @@ export default function CoachPanel({ packet, cue }) {
       <div className="coach-copy">
         <p className="eyebrow">Coach cue</p>
         <h2>{message}</h2>
-        <div className="coach-stats">
-          <span><Radio size={15} /> local cue</span>
-          <span><Volume2 size={15} /> {cue?.voice_status || packet?.voice_status || "idle"}</span>
-          <span>{cue?.avatar_status || packet?.avatar_status || "idle"} avatar</span>
-          <span>{cue?.should_speak ? "spoken" : cue?.reason || "visual"}</span>
+        <div className="ai-coach-box">
+          <div>
+            <p className="eyebrow">Guidance source</p>
+            <strong>{localMessage}</strong>
+          </div>
+          <span className="ai-status ai-status-ready">
+            {sourceLabel(cueSource)}
+          </span>
         </div>
-        {audioSrc && (
-          <audio className="coach-audio" src={audioSrc} controls />
-        )}
-        {avatarSrc && (
-          <a className="coach-media-link" href={avatarSrc} target="_blank" rel="noreferrer">
-            <ExternalLink size={15} /> Avatar media
-          </a>
-        )}
+        <div className="coach-stats">
+          <span><Radio size={15} /> {sourceLabel(cueSource)}</span>
+          <span><Volume2 size={15} /> {voiceStatus || "idle"}</span>
+          <span>{cue?.avatar_status || "disabled"} avatar</span>
+          <span>follow your therapist's plan</span>
+        </div>
+        <div className="coach-toggle-row">
+          <button type="button" onClick={onToggleVoiceEnabled}>
+            <Volume2 size={15} /> {voiceEnabled ? "Voice on" : "Voice off"}
+          </button>
+          <button type="button" onClick={onToggleVoiceMuted}>
+            {voiceMuted ? <VolumeX size={15} /> : <Volume2 size={15} />} {voiceMuted ? "Muted" : "Unmuted"}
+          </button>
+        </div>
+        {voiceError && <p className="coach-error">{voiceError}</p>}
       </div>
     </section>
   );
