@@ -3,7 +3,7 @@ import React from "react";
 /**
  * Animated black blob avatar.
  * States: idle | thinking | speaking
- * Sizes: sm (floating companion) | md (inline panels)
+ * Sizes: sm (floating companion) | md (inline panels) | lg (check-in stage)
  */
 export default function BlobCoachAvatar({ status = "idle", size = "md" }) {
   const statusClass =

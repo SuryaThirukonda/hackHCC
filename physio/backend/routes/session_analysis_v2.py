@@ -3,9 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from coach.gemini_session_analysis_v2 import GeminiSessionAnalysisV2Provider, local_fallback_analysis
+from coach.therapist_note_v2 import TherapistNoteV2Provider
 from schemas_session_analysis_v2 import (
     FinalSessionAnalysisPacketV2,
     GeminiSessionAnalysisResponseV2,
+    TherapistNoteRequestV2,
+    TherapistNoteResponseV2,
 )
 
 router = APIRouter(prefix="/api/analysis/v2", tags=["session-analysis-v2"])
@@ -39,6 +42,15 @@ def session_summary_local(packet: FinalSessionAnalysisPacketV2) -> dict:
 @router.post("/gemini-session-analysis", response_model=GeminiSessionAnalysisResponseV2)
 def gemini_session_analysis(packet: FinalSessionAnalysisPacketV2) -> GeminiSessionAnalysisResponseV2:
     return GeminiSessionAnalysisV2Provider().analyze(packet)
+
+
+@router.post("/therapist-note", response_model=TherapistNoteResponseV2)
+def therapist_note(request: TherapistNoteRequestV2) -> TherapistNoteResponseV2:
+    return TherapistNoteV2Provider().generate(
+        request.session_packet,
+        request.patient_feedback,
+        request.gemini_analysis,
+    )
 
 
 @router.get("/status")

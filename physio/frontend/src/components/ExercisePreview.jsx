@@ -24,6 +24,10 @@ export default function ExercisePreview({ exercise, onBack, onBegin }) {
           <p>{exercise.clinicalFraming}</p>
         </div>
 
+        <div className="safety-disclaimer">
+          <p><strong>Safety:</strong> Stop if you feel sharp pain. Follow your therapist&apos;s plan.</p>
+        </div>
+
         <div className="instruction-list">
           <InstructionStep title="Setup" text={exercise.setupCue} />
           {exercise.instructions.map((instruction, index) => (
@@ -38,7 +42,7 @@ export default function ExercisePreview({ exercise, onBack, onBegin }) {
         </div>
 
         <button type="button" className="primary-wide" onClick={onBegin}>
-          <Play size={18} /> Begin Session
+          <Play size={18} /> Start Test
         </button>
       </section>
 

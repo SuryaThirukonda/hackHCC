@@ -29,8 +29,9 @@ import {
   startSession
 } from "./api/client.js";
 import { getPresentationStatus } from "./api/sessionRecordingV2Client.js";
-import { generateGeminiSessionAnalysis } from "./analysis/gemini/geminiSessionAnalysisClient.js";
+import { generateGeminiSessionAnalysis, generateTherapistNote } from "./analysis/gemini/geminiSessionAnalysisClient.js";
 import { buildFinalSessionAnalysisPacket } from "./analysis/session/buildFinalSessionAnalysisPacket.js";
+import { buildSampleSessionBundle } from "./demo/sampleSession.js";
 import { buildPhysioAIPacket } from "./ai/buildPhysioAIPacket.js";
 import {
   resolveOverlayCoachMessage,
@@ -45,8 +46,9 @@ import ExercisePreview from "./components/ExercisePreview.jsx";
 import LiveSession from "./components/LiveSession.jsx";
 import ProgressDashboard from "./components/ProgressDashboard.jsx";
 import SessionSummary from "./components/SessionSummary.jsx";
-import ResultsPresentationPanel from "./components/results/ResultsPresentationPanel.jsx";
+import ResultsFlowStepper from "./components/results/ResultsFlowStepper.jsx";
 import SessionReplayOverlay from "./components/results/SessionReplayOverlay.jsx";
+import VoiceLabDebugPanel from "./components/debug/VoiceLabDebugPanel.jsx";
 import { defaultExercise, exercises } from "./exercises/index.js";
 import { useSessionRecorder } from "./recording/useSessionRecorder.js";
 import {
@@ -146,6 +148,16 @@ export default function App() {
   const [resultsVoiceStatus, setResultsVoiceStatus] = useState("idle");
   const [blobMinimized, setBlobMinimized] = useState(false);
   const [bonusRepRequested, setBonusRepRequested] = useState(false);
+  const [patientFeedback, setPatientFeedback] = useState(null);
+  const [therapistNote, setTherapistNote] = useState(null);
+  const [therapistNoteStatus, setTherapistNoteStatus] = useState("idle");
+  const [therapistNoteError, setTherapistNoteError] = useState("");
+  const [isDemoSession, setIsDemoSession] = useState(false);
+  const [resultsFlowStep, setResultsFlowStep] = useState("summary");
+  const [checkInCoachMessage, setCheckInCoachMessage] = useState("");
+  const [checkInVoiceStatus, setCheckInVoiceStatus] = useState("idle");
+  const [checkInSpeechStatus, setCheckInSpeechStatus] = useState({ listening: false, transcribing: false });
+  const [checkInConversation, setCheckInConversation] = useState(null);
   const voiceThrottleRef = useRef({ lastSpeakAt: 0, lastText: "", lastPhase: "" });
   const audioRef = useRef(null);
   const pendingAudioRef = useRef(null); // queued URL to play once current clip ends
@@ -174,7 +186,10 @@ export default function App() {
   // Reload session data from DB whenever user switches to the results tab
   useEffect(() => {
     if (activeTab === "results") refreshSessions();
-    if (activeTab !== "results") setResultsVoiceStatus("idle");
+    if (activeTab !== "results") {
+      setResultsVoiceStatus("idle");
+      setCheckInSpeechStatus({ listening: false, transcribing: false });
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -394,23 +409,13 @@ export default function App() {
 
   const blobCoachMessage = useMemo(() => {
     if (activeTab === "results") {
-      const cached = summary?.session_id ? presentationCaches[summary.session_id] : null;
-      const cachedAnalysis = cached?.gemini_result?.analysis;
-      const written = geminiSessionAnalysis?.analysis?.written_summary || cachedAnalysis?.written_summary || "";
-      const spoken = geminiSessionAnalysis?.analysis?.spoken_summary || cachedAnalysis?.spoken_summary || "";
-      if (written || spoken) return written || spoken;
-      if (geminiSessionStatus === "loading") return "Preparing your AI summary…";
-      if (summary?.recommendation_text) return summary.recommendation_text;
-      if (cached?.summary?.recommendation_text) return cached.summary.recommendation_text;
-      if (!summary) {
-        const latestCache = Object.values(presentationCaches)[0];
-        const latestAnalysis = latestCache?.gemini_result?.analysis;
-        if (latestAnalysis?.written_summary || latestAnalysis?.spoken_summary) {
-          return latestAnalysis.written_summary || latestAnalysis.spoken_summary;
-        }
-        if (latestCache?.summary?.recommendation_text) return latestCache.summary.recommendation_text;
+      if (resultsFlowStep === "checkin") {
+        return checkInCoachMessage || "How did that session feel? Tell me about any pain, tightness, or fatigue.";
       }
-      return "Complete a session to see your coach summary.";
+      if (resultsFlowStep === "notes") {
+        return therapistNote?.next_focus || therapistNote?.patient_feedback || "Your session note is ready.";
+      }
+      return "";
     }
     if (runner.status === RUNNER_STATES.COUNTDOWN) return "Get ready…";
     if (runner.status === RUNNER_STATES.ACTIVE) {
@@ -425,28 +430,36 @@ export default function App() {
     return "Your coach is here when you need guidance.";
   }, [
     activeTab,
+    resultsFlowStep,
+    checkInCoachMessage,
+    therapistNote,
     runner.status,
     overlayCoachMessage,
     aiCue,
     packet,
-    geminiSessionAnalysis,
-    geminiSessionStatus,
-    summary,
     showExerciseDetail,
-    presentationCaches
   ]);
 
   const blobCoachStatus = useMemo(() => {
     if (activeTab === "results") {
-      if (resultsVoiceStatus === "playing") return "speaking";
-      if (resultsVoiceStatus === "loading" || geminiSessionStatus === "loading") return "thinking";
+      if (resultsFlowStep === "checkin") {
+        if (checkInSpeechStatus.listening || checkInSpeechStatus.transcribing) return "thinking";
+        if (checkInVoiceStatus === "playing") return "speaking";
+        if (checkInVoiceStatus === "loading") return "thinking";
+        return "idle";
+      }
+      if (resultsFlowStep === "summary") {
+        if (resultsVoiceStatus === "playing") return "speaking";
+        if (resultsVoiceStatus === "loading" || geminiSessionStatus === "loading") return "thinking";
+        return "idle";
+      }
       return "idle";
     }
     if (voiceStatus === "playing") return "speaking";
     if (voiceStatus === "loading") return "thinking";
     if (runner.status === RUNNER_STATES.COUNTDOWN) return "thinking";
     return "idle";
-  }, [activeTab, voiceStatus, resultsVoiceStatus, geminiSessionStatus, runner.status]);
+  }, [activeTab, voiceStatus, resultsVoiceStatus, checkInVoiceStatus, checkInSpeechStatus, geminiSessionStatus, runner.status, resultsFlowStep]);
 
   async function refreshSessions() {
     const [basicResult, richResult, cacheResult] = await Promise.allSettled([
@@ -525,11 +538,20 @@ export default function App() {
 
   async function handleEnd() {
     const activeSession = sessionId || packet?.session_id || "local-webcam-session";
+    setIsDemoSession(false);
+    setPatientFeedback(null);
+    setTherapistNote(null);
+    setTherapistNoteStatus("idle");
+    setTherapistNoteError("");
+    setResultsFlowStep("summary");
+    setCheckInCoachMessage("");
+    setCheckInVoiceStatus("idle");
+    setCheckInConversation(null);
     const localSummary = summarizeRunnerSession(runner, {
       sessionId: activeSession,
       exercise: selectedExercise,
-      painLevel: 2,
-      fatigueLevel: 4
+      painLevel: 0,
+      fatigueLevel: 0
     });
     setSummary(localSummary);
     setLocalSessions((items) => {
@@ -537,7 +559,6 @@ export default function App() {
       saveLocalSessionHistory(next);
       return next;
     });
-    // Persist the full rich summary (with completed_reps) to SQLite immediately
     saveSessionResult(localSummary).catch(() => {});
     setSessionId(null);
     setActiveTab("results");
@@ -547,9 +568,7 @@ export default function App() {
     const finalPacket = buildFinalSessionAnalysisPacket({
       runner,
       exercise: selectedExercise,
-      sessionId: activeSession,
-      painLevel: 2,
-      fatigueLevel: 4
+      sessionId: activeSession
     });
     setFinalAnalysisPacket(finalPacket);
     setLatestAiPacket(finalPacket);
@@ -620,13 +639,103 @@ export default function App() {
     try {
       await endSession({
         session_id: activeSession,
-        pain_level: 2,
-        fatigue_level: 4
+        pain_level: 0,
+        fatigue_level: 0
       });
       await refreshSessions();
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  async function handleCheckInSubmit(feedback) {
+    if (!summary || !finalAnalysisPacket) return;
+    setPatientFeedback(feedback);
+    setCheckInConversation(feedback.check_in_conversation || null);
+    setTherapistNoteStatus("loading");
+    setTherapistNoteError("");
+
+    const updatedSummary = {
+      ...summary,
+      pain_level: feedback.pain_level,
+      fatigue_level: feedback.fatigue_level,
+      patient_feedback: feedback,
+      gemini_recommendation: geminiSessionAnalysis?.analysis?.focus_next_time || summary.recommendation_text
+    };
+    setSummary(updatedSummary);
+
+    const updatedPacket = {
+      ...finalAnalysisPacket,
+      patient_reported: feedback
+    };
+    setFinalAnalysisPacket(updatedPacket);
+
+    let noteResult = null;
+    try {
+      noteResult = await generateTherapistNote(updatedPacket, feedback, geminiSessionAnalysis?.analysis);
+      setTherapistNote(noteResult.note);
+      setTherapistNoteStatus(noteResult.fallback_used ? "fallback" : "ready");
+    } catch (err) {
+      setTherapistNoteError(err.message);
+      setTherapistNoteStatus("error");
+    }
+
+    const enrichedSummary = {
+      ...updatedSummary,
+      therapist_note: noteResult?.note || null,
+      check_in_conversation: feedback.check_in_conversation || null,
+      voice_audio_url: feedback.voice_audio_url || null,
+      greeting_audio_url: feedback.greeting_audio_url || null
+    };
+    saveSessionResult(enrichedSummary).catch(() => {});
+    setLocalSessions((items) => {
+      const next = [enrichedSummary, ...items.filter((item) => item.session_id !== enrichedSummary.session_id)].slice(0, 12);
+      saveLocalSessionHistory(next);
+      return next;
+    });
+    persistPresentationCache(summary.session_id, {
+      summary: enrichedSummary,
+      final_analysis_packet: updatedPacket,
+      gemini_result: geminiSessionAnalysis,
+      gemini_status: geminiSessionStatus,
+      patient_feedback: feedback,
+      check_in_conversation: feedback.check_in_conversation || null,
+      voice_audio_url: feedback.voice_audio_url || null,
+      therapist_note: noteResult?.note || null,
+      recording: sessionRecording
+    });
+    setResultsFlowStep("notes");
+  }
+
+  function handleLoadSampleSession() {
+    const demo = buildSampleSessionBundle();
+    setIsDemoSession(true);
+    setSummary(demo.summary);
+    setFinalAnalysisPacket(demo.finalAnalysisPacket);
+    setGeminiSessionAnalysis(demo.geminiSessionAnalysis);
+    setGeminiSessionStatus("ready");
+    setGeminiSessionError("");
+    setSessionRecording(demo.sessionRecording);
+    setPatientFeedback({
+      raw_text: "A little tired but no sharp pain",
+      classification: "fatigue",
+      pain_level: 0,
+      fatigue_level: 6,
+      difficulty_vs_last: "same",
+      sharp_pain: false,
+      response_text: "Thanks. I'll note that this felt tiring today. Follow your therapist's plan and keep the next session controlled."
+    });
+    setCheckInConversation([
+      { role: "coach", text: "How did that feel?" },
+      { role: "patient", text: "A little tired but no sharp pain" },
+      { role: "coach", text: "Thanks. I'll note that this felt tiring today. Follow your therapist's plan and keep the next session controlled." }
+    ]);
+    setResultsFlowStep("summary");
+  }
+
+  function handleContinueToProgress() {
+    refreshSessions().catch(() => {});
+    setActiveTab("progress");
   }
 
   function handleExerciseStart(exercise) {
@@ -649,8 +758,8 @@ export default function App() {
       ? "Review setup cues and begin live webcam analysis."
       : "A guided rehab flow focused on one reliable local movement demo.",
     live: "Live Webcam Analysis tracks your shoulder, elbow, and wrist landmarks in this browser.",
-    results: "Most recent completed session summary.",
-    progress: "Saved sessions and clearly labeled demo history.",
+    results: "Review your current session, check in with your coach, then view session notes.",
+    progress: "Compare past sessions and track how your movement has changed.",
     debug: "Raw packet, source, and backend controls moved out of the patient flow."
   }[activeTab];
 
@@ -701,6 +810,9 @@ export default function App() {
             <p className="eyebrow">Physical therapy demo</p>
             <h1>{pageTitle}</h1>
             <p>{pageSubtitle}</p>
+            {activeTab === "results" && (
+              <p className="safety-disclaimer-inline">Stop if you feel sharp pain. Follow your therapist&apos;s plan.</p>
+            )}
           </div>
           {activeTab === "live" && (
             <div className="session-actions">
@@ -733,7 +845,11 @@ export default function App() {
               onBegin={beginExercise}
             />
           ) : (
-            <ExercisesPage exercises={exercises} onStart={handleExerciseStart} />
+            <ExercisesPage
+              exercises={exercises}
+              onStart={handleExerciseStart}
+              onLoadSampleSession={handleLoadSampleSession}
+            />
           )
         )}
 
@@ -768,26 +884,35 @@ export default function App() {
           <ResultsPage
             summary={summary}
             selectedExercise={selectedExercise}
-            aiSummaryText={aiSummaryText}
-            aiHealthReport={aiHealthReport}
             finalAnalysisPacket={finalAnalysisPacket}
             geminiSessionAnalysis={geminiSessionAnalysis}
             geminiSessionStatus={geminiSessionStatus}
             geminiSessionError={geminiSessionError}
-            geminiAnalysisCache={geminiAnalysisCache}
             sessionRecording={sessionRecording}
-            presentationStatus={presentationStatus}
             sessionId={sessionLabel}
-            sessionResults={sessionResults}
-            sessions={sessions}
-            presentationCaches={presentationCaches}
-            onRefresh={refreshSessions}
             onResultsVoiceStatusChange={setResultsVoiceStatus}
+            onCheckInSubmit={handleCheckInSubmit}
+            patientFeedback={patientFeedback}
+            checkInConversation={checkInConversation}
+            therapistNote={therapistNote}
+            therapistNoteStatus={therapistNoteStatus}
+            therapistNoteError={therapistNoteError}
+            onContinue={handleContinueToProgress}
+            onLoadSampleSession={handleLoadSampleSession}
+            isDemoSession={isDemoSession}
+            onCheckInCoachMessage={setCheckInCoachMessage}
+            onCheckInVoiceStatusChange={setCheckInVoiceStatus}
+            onCheckInSpeechStatusChange={setCheckInSpeechStatus}
+            onFlowStepChange={setResultsFlowStep}
+            initialFlowStep={resultsFlowStep}
           />
         )}
 
         {activeTab === "progress" && (
-          <ProgressDashboard packet={packet} sessions={sessions} localSessions={localSessions} sourceMode={sourceMode} />
+          <ProgressDashboard
+            sessions={sessionResults.length ? sessionResults : sessions}
+            localSessions={localSessions.filter((item) => !item.is_demo)}
+          />
         )}
 
         {activeTab === "debug" && (
@@ -818,12 +943,14 @@ export default function App() {
         <footer className="footer-wordmark" aria-hidden="true">physio</footer>
       </section>
 
-      <BlobCoachCompanion
-        message={blobCoachMessage}
-        status={blobCoachStatus}
-        minimized={blobMinimized}
-        onToggleMinimize={() => setBlobMinimized((value) => !value)}
-      />
+      {(activeTab !== "results" || resultsFlowStep !== "summary") && activeTab !== "debug" && (
+        <BlobCoachCompanion
+          message={blobCoachMessage}
+          status={blobCoachStatus}
+          minimized={blobMinimized}
+          onToggleMinimize={() => setBlobMinimized((value) => !value)}
+        />
+      )}
     </main>
   );
 }
@@ -933,7 +1060,7 @@ function resolveFeaturedPresentation({
   };
 }
 
-function ExercisesPage({ exercises: exerciseList, onStart }) {
+function ExercisesPage({ exercises: exerciseList, onStart, onLoadSampleSession }) {
   return (
     <>
       <section className="product-hero">
@@ -981,6 +1108,12 @@ function ExercisesPage({ exercises: exerciseList, onStart }) {
               </button>
             </article>
           ))}
+        </div>
+        <div className="demo-fallback-row">
+          <button type="button" className="secondary-btn" onClick={onLoadSampleSession}>
+            Load Sample Session
+          </button>
+          <span className="muted-sub">Demo playback — not live tracking data.</span>
         </div>
       </section>
     </>
@@ -1123,123 +1256,77 @@ function RepTimingPanel({ reps = [], exercise }) {
 function ResultsPage({
   summary,
   selectedExercise,
-  aiSummaryText,
-  aiHealthReport,
   finalAnalysisPacket,
   geminiSessionAnalysis,
   geminiSessionStatus,
   geminiSessionError,
-  geminiAnalysisCache,
   sessionRecording,
-  presentationStatus,
   sessionId,
-  sessionResults,
-  sessions,
-  presentationCaches,
-  onRefresh,
-  onResultsVoiceStatusChange
+  onCheckInSubmit,
+  patientFeedback,
+  checkInConversation,
+  therapistNote,
+  therapistNoteStatus,
+  therapistNoteError,
+  onContinue,
+  onLoadSampleSession,
+  isDemoSession,
+  onResultsVoiceStatusChange,
+  onCheckInCoachMessage,
+  onCheckInVoiceStatusChange,
+  onCheckInSpeechStatusChange,
+  onFlowStepChange,
+  initialFlowStep,
 }) {
-  const [expandedId, setExpandedId] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const dbRows = sessionResults.length > 0 ? sessionResults : sessions;
-
-  const allResults = summary
-    ? [summary, ...dbRows.filter((r) => r.session_id !== summary.session_id)]
-    : dbRows;
-
-  const featuredSession = allResults[0] || null;
-  const historyRows = allResults.slice(1);
-  const featuredPresentation = resolveFeaturedPresentation({
-    featuredSession,
-    summary,
-    presentationCaches,
-    geminiSessionAnalysis,
-    geminiSessionStatus,
-    geminiSessionError,
-    geminiAnalysisCache,
-    sessionRecording,
-    finalAnalysisPacket
-  });
-
-  async function handleRefresh() {
-    setRefreshing(true);
-    try { await onRefresh(); } catch { /* ignore */ }
-    setRefreshing(false);
-  }
+  const featuredSession = summary || null;
+  const featuredPresentation = featuredSession ? {
+    sessionId: featuredSession.session_id || sessionId,
+    summary: featuredSession,
+    geminiResult: geminiSessionAnalysis,
+    geminiStatus: geminiSessionStatus,
+    geminiError: geminiSessionError,
+    recording: sessionRecording,
+    finalAnalysisPacket,
+  } : null;
 
   return (
-    <div className="results-page">
-      <div className="results-page-header">
-        <div>
-          <p className="eyebrow">Physical Therapy Demo</p>
-          <h1>Session results</h1>
-          <p className="muted-sub">All completed sessions stored in the database.</p>
-        </div>
-        <button
-          type="button"
-          className="refresh-btn"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
-          <RefreshIcon spinning={refreshing} />
-          {refreshing ? "Loading…" : "Refresh"}
-        </button>
-      </div>
-
+    <div className="results-page results-page--focused">
       {!featuredSession ? (
         <section className="empty-state">
           <FileText size={34} />
-          <h2>No completed sessions yet.</h2>
-          <p>Run {selectedExercise?.name || "an exercise"} and end the session to see results here.</p>
+          <h2>No completed session yet.</h2>
+          <p>Run {selectedExercise?.name || "an exercise"} and end the session to see your results here.</p>
+          <button type="button" className="secondary-btn" onClick={onLoadSampleSession}>
+            Load Sample Session
+          </button>
+          <p className="muted-sub">Demo playback — not live tracking data.</p>
         </section>
       ) : (
-        <>
-          {featuredPresentation && (
-            <ResultsPresentationPanel
-              geminiResult={featuredPresentation.geminiResult}
-              geminiStatus={featuredPresentation.geminiStatus}
-              sessionId={featuredPresentation.sessionId}
-              summary={featuredPresentation.summary}
-              recording={featuredPresentation.recording}
-              finalAnalysisPacket={featuredPresentation.finalAnalysisPacket}
-              geminiError={featuredPresentation.geminiError}
-              geminiCache={featuredPresentation.geminiCache}
-              onVoiceStatusChange={onResultsVoiceStatusChange}
-            />
-          )}
-          <SessionSummary
-            summary={featuredSession}
-            aiSummaryText={
-              featuredPresentation?.geminiResult?.analysis?.written_summary
-              || (featuredSession.session_id === summary?.session_id ? aiSummaryText : "")
-            }
-            aiHealthReport={
-              featuredPresentation?.geminiResult?.analysis?.focus_next_time
-              || (featuredSession.session_id === summary?.session_id ? aiHealthReport : "")
-            }
+        featuredPresentation && (
+          <ResultsFlowStepper
+            geminiResult={featuredPresentation.geminiResult}
+            geminiStatus={featuredPresentation.geminiStatus}
+            sessionId={featuredPresentation.sessionId}
+            summary={featuredPresentation.summary}
+            recording={featuredPresentation.recording}
+            finalAnalysisPacket={featuredPresentation.finalAnalysisPacket}
+            geminiError={featuredPresentation.geminiError}
+            onVoiceStatusChange={onResultsVoiceStatusChange}
+            onCheckInSubmit={onCheckInSubmit}
+            onCheckInCoachMessage={onCheckInCoachMessage}
+            onCheckInVoiceStatusChange={onCheckInVoiceStatusChange}
+            onCheckInSpeechStatusChange={onCheckInSpeechStatusChange}
+            onFlowStepChange={onFlowStepChange}
+            initialStep={initialFlowStep}
+            patientFeedback={patientFeedback}
+            checkInConversation={checkInConversation}
+            therapistNote={therapistNote}
+            therapistNoteStatus={therapistNoteStatus}
+            therapistNoteError={therapistNoteError}
+            onContinue={onContinue}
+            isDemo={isDemoSession || featuredSession?.is_demo}
           />
-
-          {historyRows.length > 0 && (
-            <section className="session-history">
-              <div className="session-history-heading">
-                <p className="eyebrow">Session history</p>
-                <span className="history-count">{historyRows.length} previous {historyRows.length === 1 ? "session" : "sessions"}</span>
-              </div>
-              <div className="history-list">
-                {historyRows.map((sess) => (
-                  <HistoryCard
-                    key={sess.session_id}
-                    session={sess}
-                    presentationCaches={presentationCaches}
-                    expanded={expandedId === sess.session_id}
-                    onToggle={() => setExpandedId(expandedId === sess.session_id ? null : sess.session_id)}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+        )
       )}
     </div>
   );
@@ -1468,6 +1555,13 @@ function DebugPage({
 }) {
   return (
     <div className="debug-layout">
+      <section className="debug-card voice-input-test-card">
+        <p className="eyebrow">Voice lab</p>
+        <h2>Results audio stack</h2>
+        <p className="muted-sub">Test the same speech-to-text and text-to-speech pipeline used on the Results page — no session analysis required.</p>
+        <VoiceLabDebugPanel />
+      </section>
+
       <section className="debug-card">
         <div className="panel-heading">
           <div>

@@ -7,15 +7,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from coach.coach_orchestrator import CoachOrchestrator
-from coach.base import clean_coach_text
+from coach.base import clean_coach_text, clean_spoken_summary_text
 from coach.gemini_coach import GeminiCoachProvider, sanitize_gemini_error
 from coach.gemini_session_analysis_v2 import GeminiSessionAnalysisV2Provider
+from coach.speech_transcription import SpeechTranscriptionProvider
 from coach.voice_provider import get_voice_provider
 from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
@@ -78,6 +79,7 @@ class SessionState:
 state = SessionState()
 mock_generator = MockPacketGenerator()
 coach_orchestrator = CoachOrchestrator()
+speech_transcriber = SpeechTranscriptionProvider()
 store = get_session_store()
 websockets: set[WebSocket] = set()
 
@@ -479,9 +481,24 @@ def ai_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+@app.post("/api/ai/speech-to-text")
+async def ai_speech_to_text(audio: UploadFile = File(...)) -> dict[str, Any]:
+    data = await audio.read()
+    mime_type = audio.content_type or "audio/webm"
+    return speech_transcriber.transcribe(data, mime_type)
+
+
+@app.post("/api/ai/speech-to-text-test")
+def ai_speech_to_text_test() -> dict[str, Any]:
+    from coach.speech_transcription import run_stt_sanity_tests
+
+    return run_stt_sanity_tests()
+
+
 @app.post("/api/ai/elevenlabs-tts")
 def ai_elevenlabs_tts(payload: dict[str, Any]) -> dict[str, Any]:
-    text = clean_coach_text(str((payload or {}).get("text") or ""), "")
+    raw = str((payload or {}).get("text") or "")
+    text = clean_spoken_summary_text(raw, "") if len(raw.strip()) > 160 else clean_coach_text(raw, "")
     if not text:
         return {"ok": False, "status": "empty_text", "audio_url": None}
     result = get_voice_provider().synthesize(text)

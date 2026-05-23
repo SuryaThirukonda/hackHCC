@@ -28,7 +28,8 @@ export async function requestElevenLabsSummary(text, sessionId) {
   try {
     const result = await request("/api/presentation/v2/elevenlabs-summary", {
       method: "POST",
-      body: JSON.stringify({ text: spokenText, session_id: sessionId })
+      body: JSON.stringify({ text: spokenText, session_id: sessionId }),
+      timeoutMs: 90000,
     });
     if (result.ok && result.audio_url) {
       return {

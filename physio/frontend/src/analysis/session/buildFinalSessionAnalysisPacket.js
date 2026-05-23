@@ -25,8 +25,20 @@ function compactRep(rep) {
   };
 }
 
-export function buildFinalSessionAnalysisPacket({ runner, exercise, sessionId, painLevel = 2, fatigueLevel = 4 } = {}) {
-  const localSummary = buildLocalSessionSummary({ runner, exercise, sessionId, painLevel, fatigueLevel });
+export function buildFinalSessionAnalysisPacket({ runner, exercise, sessionId, painLevel = null, fatigueLevel = null, patientFeedback = null } = {}) {
+  const localSummary = buildLocalSessionSummary({
+    runner,
+    exercise,
+    sessionId,
+    painLevel: painLevel ?? 0,
+    fatigueLevel: fatigueLevel ?? 0
+  });
+  const packets = runner?.activePackets || [];
+  const isForwardPress = exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
+  const sensorPackets = packets.filter((p) => p?.distance_cm != null);
+  const sensorAvailableRatio = packets.length ? sensorPackets.length / packets.length : 0;
+  const calibrationComplete = packets.some((p) => p?.calibration_complete);
+  const sensorStatus = packets.find((p) => p?.sensor_status)?.sensor_status || "offline";
   return {
     schema_version: SESSION_ANALYSIS_VERSION,
     exercise_id: localSummary.exercise,
@@ -78,10 +90,17 @@ export function buildFinalSessionAnalysisPacket({ runner, exercise, sessionId, p
       warnings: localSummary.warnings
     },
     rep_breakdown: (localSummary.completed_reps || []).map(compactRep),
-    patient_reported: {
-      pain_level: painLevel,
-      fatigue_level: fatigueLevel
+    patient_reported: patientFeedback || {
+      pain_level: painLevel ?? 0,
+      fatigue_level: fatigueLevel ?? 0
     },
+    sensor_quality: isForwardPress ? {
+      sensor_status: sensorStatus,
+      calibration_complete: calibrationComplete,
+      calibration_quality: packets.find((p) => p?.calibration_quality)?.calibration_quality || "missing",
+      average_sensor_linearity_score: localSummary.average_sensor_linearity_score,
+      sensor_available_ratio: sensorAvailableRatio > 0 ? Number(sensorAvailableRatio.toFixed(2)) : null
+    } : null,
     local_summary: {
       summary_text: localSummary.summary_text,
       recommendation_text: localSummary.recommendation_text

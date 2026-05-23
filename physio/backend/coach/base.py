@@ -30,6 +30,16 @@ def clean_coach_text(text: str, fallback: str = "Move slowly and stay in control
     return normalized
 
 
+def clean_spoken_summary_text(text: str, fallback: str = "", max_len: int = 1200) -> str:
+    """Normalize Gemini spoken summaries for full-length ElevenLabs playback."""
+    normalized = " ".join((text or "").replace("\n", " ").split())
+    if not normalized:
+        return fallback
+    if len(normalized) > max_len:
+        normalized = normalized[: max_len - 3].rstrip(" ,.;:") + "..."
+    return normalized
+
+
 def packet_metrics_for_ai(packet: PhysioPacket) -> dict[str, int | float | str | bool | None]:
     """Only scalar coaching metrics are sent to remote AI providers."""
     return {

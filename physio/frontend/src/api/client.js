@@ -36,11 +36,12 @@ async function parseError(response, path, base, method) {
 
 export async function request(path, options = {}) {
   const method = options.method || "GET";
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let lastError = null;
   for (const base of candidateBases(path)) {
     let response;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
       response = await fetch(`${base}${path}`, {
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -190,12 +191,22 @@ export function generateGeminiSessionAnalysisV2(packet) {
   });
 }
 
+export function generateTherapistSessionNote(payload) {
+  return request("/api/analysis/v2/therapist-note", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export function generateElevenLabsSpeech(text) {
   return request("/api/ai/elevenlabs-tts", {
     method: "POST",
-    body: JSON.stringify({ text })
+    body: JSON.stringify({ text }),
+    timeoutMs: 90000,
   });
 }
+
+export { transcribeSpeechAudio } from "./speechClient.js";
 
 export function getCoachWebSocketUrl() {
   const url = new URL(API_BASE);

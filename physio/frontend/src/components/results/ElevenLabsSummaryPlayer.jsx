@@ -81,6 +81,11 @@ export default function ElevenLabsSummaryPlayer({
     }
   }, [spokenSummary, sessionId, updateStatus]);
 
+  const synthesizeRef = useRef(null);
+  const stopAudioRef = useRef(null);
+  synthesizeRef.current = synthesize;
+  stopAudioRef.current = stopAudio;
+
   useEffect(() => {
     const requestKey = `${sessionId || "session"}:${spokenSummary || ""}`;
     if (requestKeyRef.current !== requestKey) {
@@ -89,13 +94,13 @@ export default function ElevenLabsSummaryPlayer({
       autoPlayAttemptedRef.current = false;
       setAudioUrl(null);
       setError("");
-      stopAudio("idle");
+      stopAudioRef.current?.("idle");
     }
     if (spokenSummary && !fetchedRef.current) {
       fetchedRef.current = true;
-      synthesize();
+      synthesizeRef.current?.();
     }
-  }, [sessionId, spokenSummary, synthesize, stopAudio]);
+  }, [sessionId, spokenSummary]);
 
   const playAudio = useCallback(() => {
     if (!audioUrl || muted) return;

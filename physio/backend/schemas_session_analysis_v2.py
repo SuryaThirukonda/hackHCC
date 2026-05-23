@@ -34,6 +34,19 @@ class AggregateMetricsV2(BaseModel):
     smoothed_average_elbow_angle: float | None = None
     raw_average_shoulder_angle: float | None = None
     smoothed_average_shoulder_angle: float | None = None
+    best_push_depth_cm: float | None = None
+    average_push_depth_cm: float | None = None
+    average_extension_angle: float | None = None
+    average_shoulder_drift: float | None = None
+    average_sensor_linearity_score: float | None = None
+
+
+class SensorQualityV2(BaseModel):
+    sensor_status: str = "offline"
+    calibration_complete: bool = False
+    calibration_quality: str = "missing"
+    average_sensor_linearity_score: float | None = None
+    sensor_available_ratio: float | None = Field(default=None, ge=0, le=1)
 
 
 class TrackingQualityV2(BaseModel):
@@ -60,6 +73,8 @@ class MovementTracePointV2(BaseModel):
     smoothed_elbow_angle: float | None = None
     angle_residual: float | None = None
     jitter_score: float | None = Field(default=None, ge=0, le=1)
+    distance_cm: float | None = None
+    push_depth_cm: float | None = None
     phase: str | None = None
     rep_count: int = 0
     confidence: float | None = Field(default=None, ge=0, le=1)
@@ -69,11 +84,14 @@ class MovementTracePointV2(BaseModel):
 class RepBreakdownV2(BaseModel):
     rep_index: int
     range_of_motion: float | None = None
+    push_depth_cm: float | None = None
+    max_extension_angle: float | None = None
     hold_time_sec: float | None = None
     rep_duration_sec: float | None = None
     pace: str = "unknown"
     jitter_score: float | None = None
     shoulder_drift: float | None = None
+    sensor_linearity_score: float | None = None
     physio_score: int | None = None
     issue: str = "none"
     clean: bool = False
@@ -82,6 +100,41 @@ class RepBreakdownV2(BaseModel):
 class LocalSummaryTextV2(BaseModel):
     summary_text: str = ""
     recommendation_text: str = ""
+
+
+class PatientFeedbackV2(BaseModel):
+    raw_text: str = ""
+    classification: str = "no_issue"
+    pain_level: int = Field(default=0, ge=0, le=10)
+    fatigue_level: int = Field(default=0, ge=0, le=10)
+    difficulty_vs_last: str = "unknown"
+    sharp_pain: bool = False
+
+
+class TherapistSessionNoteV2(BaseModel):
+    exercise: str = ""
+    completed: str = ""
+    movement_quality: str = ""
+    main_issue: str = ""
+    sensor_tracking_quality: str = ""
+    patient_feedback: str = ""
+    next_focus: str = ""
+    safety_note: str = ""
+
+
+class TherapistNoteRequestV2(BaseModel):
+    session_packet: FinalSessionAnalysisPacketV2
+    patient_feedback: PatientFeedbackV2 = Field(default_factory=PatientFeedbackV2)
+    gemini_analysis: dict[str, Any] = Field(default_factory=dict)
+
+
+class TherapistNoteResponseV2(BaseModel):
+    ok: bool
+    provider: str = "local"
+    model: str = "local-fallback"
+    note: TherapistSessionNoteV2
+    fallback_used: bool = False
+    error_message_sanitized: str | None = None
 
 
 class FinalSessionAnalysisPacketV2(BaseModel):
@@ -98,6 +151,7 @@ class FinalSessionAnalysisPacketV2(BaseModel):
     issue_summary: IssueSummaryV2 = Field(default_factory=IssueSummaryV2)
     rep_breakdown: list[RepBreakdownV2] = Field(default_factory=list)
     patient_reported: dict[str, Any] = Field(default_factory=dict)
+    sensor_quality: SensorQualityV2 | None = None
     local_summary: LocalSummaryTextV2 = Field(default_factory=LocalSummaryTextV2)
 
 

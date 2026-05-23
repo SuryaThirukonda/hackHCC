@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from coach.avatar_provider import get_avatar_provider
-from coach.base import clean_coach_text
+from coach.base import clean_coach_text, clean_spoken_summary_text
 from coach.gemini_coach import GeminiCoachProvider
 from coach.voice_provider import get_voice_provider
 
@@ -34,7 +34,7 @@ def presentation_status() -> dict[str, Any]:
 @router.post("/elevenlabs-summary")
 def elevenlabs_summary(payload: dict[str, Any]) -> dict[str, Any]:
     """Synthesise the Gemini spoken_summary via ElevenLabs."""
-    text = clean_coach_text(str((payload or {}).get("text") or ""), "")
+    text = clean_spoken_summary_text(str((payload or {}).get("text") or ""), "")
     if not text:
         return {"ok": False, "status": "empty_text", "audio_url": None, "error_message_sanitized": "No text provided"}
     voice = get_voice_provider()

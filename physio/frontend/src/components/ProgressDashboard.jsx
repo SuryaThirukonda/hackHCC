@@ -1,121 +1,148 @@
-export default function ProgressDashboard({ packet, sessions, localSessions = [], sourceMode = "mock" }) {
-  const fallbackSessions = [
-    {
-      session_id: "demo-progress-1",
-      total_reps: 8,
-      best_angle: 91,
-      average_physio_score: 74,
-      average_jitter_score: 0.28,
-      pain_level: 3,
-      fatigue_level: 4
-    },
-    {
-      session_id: "demo-progress-2",
-      total_reps: 9,
-      best_angle: 95,
-      average_physio_score: 81,
-      average_jitter_score: 0.21,
-      pain_level: 2,
-      fatigue_level: 3
-    }
-  ];
-  const demoSessions = sessions.length ? sessions : fallbackSessions;
-  const recentReal = localSessions.slice(0, 4);
-  const recentDemo = demoSessions.slice(0, 4);
-  const latest = recentReal[0] || recentDemo[0];
-  const angle = packet?.exercise === "elbow_flexion_extension"
-    ? packet?.elbow_angle ?? 0
-    : packet?.shoulder_angle ?? 0;
-  const angleLabel = packet?.exercise === "elbow_flexion_extension" ? "Elbow angle" : "Angle";
-  const score = packet?.physio_score ?? 0;
-  const jitter = packet?.combined_jitter_score ?? 0;
-  const sourceLabel = {
-    python_opencv: "Real Python session",
-    browser_mediapipe: "Live Webcam Analysis session",
-    mock: "Mock demo session"
-  }[packet?.source] || {
-    python: "Real Python session",
-    browser: "Live Webcam Analysis session",
-    mock: "Mock demo session"
-  }[sourceMode];
+function compareMetric(current, previous, higherIsBetter = true) {
+  if (current == null || previous == null || !Number.isFinite(current) || !Number.isFinite(previous)) {
+    return { label: "—", tone: "neutral" };
+  }
+  const delta = current - previous;
+  if (Math.abs(delta) < 0.01) return { label: "Same as last", tone: "neutral" };
+  const improved = higherIsBetter ? delta > 0 : delta < 0;
+  return {
+    label: improved ? "Improved" : "Declined",
+    tone: improved ? "up" : "down",
+    delta: Math.abs(delta)
+  };
+}
+
+export default function ProgressDashboard({ sessions = [], localSessions = [], sourceMode = "mock" }) {
+  const realSessions = [...localSessions, ...sessions.filter((s) => !localSessions.some((l) => l.session_id === s.session_id))]
+    .filter((s) => !s.is_demo)
+    .sort((a, b) => (b.ended_at_ms || 0) - (a.ended_at_ms || 0));
+
+  const latest = realSessions[0] || null;
+  const previous = realSessions[1] || null;
+  const isForwardPress = latest?.exercise === "seated_one_arm_forward_press";
+
+  const scoreTrend = compareMetric(latest?.average_physio_score, previous?.average_physio_score, true);
+  const jitterTrend = compareMetric(latest?.average_jitter_score, previous?.average_jitter_score, false);
+  const romTrend = isForwardPress
+    ? compareMetric(latest?.best_push_depth_cm, previous?.best_push_depth_cm, true)
+    : compareMetric(latest?.best_range_of_motion ?? latest?.best_angle, previous?.best_range_of_motion ?? previous?.best_angle, true);
 
   return (
     <section className="progress-panel">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Session telemetry</p>
-          <h2>Progress dashboard</h2>
+          <p className="eyebrow">Your progress</p>
+          <h2>Session comparison</h2>
+          <p className="muted-sub">Track how your movement quality changes over time.</p>
         </div>
         <div className="heading-pills">
-          <span className="status-pill">{sourceLabel}</span>
-          {recentReal.length ? <span className="status-pill">real completed sessions</span> : <span className="status-pill">demo history</span>}
+          <span className="status-pill">{realSessions.length ? `${realSessions.length} saved sessions` : "No sessions yet"}</span>
         </div>
       </div>
 
-      <div className="progress-summary-grid">
-        <ProgressStat label="Total reps" value={latest.total_reps} />
-        <ProgressStat label="Best ROM" value={latest.best_range_of_motion ?? latest.best_angle} unit="deg" />
-        <ProgressStat label="Avg score" value={latest.average_physio_score} />
-        <ProgressStat label="Jitter" value={latest.average_jitter_score} />
-        <ProgressStat label="Pain/Fatigue" value={`${latest.pain_level ?? "--"}/${latest.fatigue_level ?? "--"}`} />
-      </div>
-
-      <div className="signal-row">
-        <Signal label={angleLabel} value={angle} displayValue={packet ? undefined : "--"} max={packet?.exercise === "elbow_flexion_extension" ? 180 : 110} />
-        <Signal label="Score" value={score} displayValue={packet?.physio_score == null ? "--" : undefined} max={100} />
-        <Signal label="Jitter" value={jitter} max={1} invert />
-      </div>
-
-      {recentReal.length > 0 && (
+      {!latest ? (
+        <p className="muted-sub">Complete a session and check in with your coach to start building progress history.</p>
+      ) : (
         <>
-          <p className="eyebrow progress-history-label">Completed sessions</p>
-          <div className="history-list">
-            {recentReal.map((session) => (
-              <SessionHistoryCard key={session.session_id} session={session} />
-            ))}
+          <div className="progress-compare-grid">
+            <CompareCard
+              title="Average score"
+              value={latest.average_physio_score ?? "—"}
+              trend={scoreTrend}
+            />
+            <CompareCard
+              title={isForwardPress ? "Best press depth" : "Best ROM"}
+              value={isForwardPress ? `${latest.best_push_depth_cm ?? "—"} cm` : `${latest.best_range_of_motion ?? latest.best_angle ?? "—"}°`}
+              trend={romTrend}
+            />
+            <CompareCard
+              title="Average jitter"
+              value={latest.average_jitter_score ?? "—"}
+              trend={jitterTrend}
+            />
+            <CompareCard
+              title="Reps completed"
+              value={`${latest.total_reps ?? 0} / ${latest.rep_goal ?? 3}`}
+              trend={{ label: previous ? `Last: ${previous.total_reps ?? 0}` : "First session", tone: "neutral" }}
+            />
+          </div>
+
+          <div className="progress-trend-cards">
+            <TrendCard title="Latest feedback" value={latest.patient_feedback?.classification?.replaceAll("_", " ") || "Not recorded"} />
+            <TrendCard title="Next focus" value={latest.therapist_note?.next_focus || latest.gemini_recommendation || latest.recommendation_text || "—"} />
+            <TrendCard title="Movement quality" value={latest.therapist_note?.movement_quality || "—"} />
           </div>
         </>
       )}
 
-      <p className="eyebrow progress-history-label">{sessions.length ? "Saved backend history" : "Demo history"}</p>
-      <div className="history-list">
-        {recentDemo.map((session) => (
-          <SessionHistoryCard key={session.session_id} session={session} demo={!sessions.length} />
-        ))}
-      </div>
+      {realSessions.length > 0 && (
+        <>
+          <p className="eyebrow progress-history-label">All sessions</p>
+          <div className="progress-session-table">
+            <div className="progress-session-head">
+              <span>Date</span>
+              <span>Exercise</span>
+              <span>Reps</span>
+              <span>Score</span>
+              <span>{isForwardPress ? "Press" : "ROM"}</span>
+              <span>Jitter</span>
+              <span>vs prior</span>
+            </div>
+            {realSessions.map((session, index) => {
+              const prior = realSessions[index + 1];
+              const press = session.exercise === "seated_one_arm_forward_press";
+              const sessionScoreTrend = compareMetric(session.average_physio_score, prior?.average_physio_score, true);
+              return (
+                <div key={session.session_id} className="progress-session-row">
+                  <span>{formatDate(session.ended_at_ms)}</span>
+                  <span>{exerciseLabel(session.exercise)}</span>
+                  <span>{session.total_reps ?? 0}/{session.rep_goal ?? 3}</span>
+                  <span>{session.average_physio_score ?? "—"}</span>
+                  <span>
+                    {press
+                      ? `${session.best_push_depth_cm ?? "—"} cm`
+                      : `${session.best_range_of_motion ?? session.best_angle ?? "—"}°`}
+                  </span>
+                  <span>{session.average_jitter_score ?? "—"}</span>
+                  <span className={`trend-pill trend-pill--${sessionScoreTrend.tone}`}>
+                    {prior ? sessionScoreTrend.label : "Baseline"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
-function SessionHistoryCard({ session, demo = false }) {
+function CompareCard({ title, value, trend }) {
   return (
-    <article className="history-card">
-      <strong>{session.total_reps} reps</strong>
-      <span>{session.average_physio_score} avg score</span>
-      <small>{demo ? "Demo" : "Real"} | Best {session.best_range_of_motion ?? session.best_angle} deg | jitter {session.average_jitter_score}</small>
+    <article className="compare-card">
+      <span>{title}</span>
+      <strong>{value}</strong>
+      <em className={`trend-pill trend-pill--${trend.tone}`}>{trend.label}</em>
     </article>
   );
 }
 
-function ProgressStat({ label, value, unit = "" }) {
+function TrendCard({ title, value }) {
   return (
-    <article className="progress-stat">
-      <p>{label}</p>
-      <strong>{value}{unit && <span>{unit}</span>}</strong>
+    <article className="trend-card">
+      <span>{title}</span>
+      <strong>{value}</strong>
     </article>
   );
 }
 
-function Signal({ label, value, max, invert = false, displayValue }) {
-  const percent = Math.max(0, Math.min(100, (value / max) * 100));
-  const height = invert ? 100 - percent : percent;
-  return (
-    <div className="signal">
-      <div className="signal-track">
-        <span style={{ height: `${height}%` }} />
-      </div>
-      <p>{label}</p>
-      <strong>{displayValue ?? Number(value).toFixed(max === 1 ? 2 : 0)}</strong>
-    </div>
-  );
+function formatDate(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function exerciseLabel(id) {
+  if (id === "seated_one_arm_forward_press") return "Forward Press";
+  if (id === "elbow_flexion_extension") return "Elbow Flexion";
+  return id || "Session";
 }

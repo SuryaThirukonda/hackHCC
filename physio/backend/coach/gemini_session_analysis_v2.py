@@ -89,7 +89,21 @@ def clean_text(value: Any, fallback: str, limit: int = 360) -> str:
     return text[:limit].rstrip()
 
 
+def is_forward_press(packet: FinalSessionAnalysisPacketV2) -> bool:
+    return packet.exercise_id == "seated_one_arm_forward_press"
+
+
+def patient_has_sharp_pain(packet: FinalSessionAnalysisPacketV2) -> bool:
+    reported = packet.patient_reported or {}
+    if reported.get("sharp_pain"):
+        return True
+    classification = str(reported.get("classification") or "").lower()
+    return classification in {"sharp_pain", "sharp pain"}
+
+
 def bonus_text(packet: FinalSessionAnalysisPacketV2) -> str:
+    if patient_has_sharp_pain(packet):
+        return ""
     metrics = packet.aggregate_metrics
     rep_goal = packet.goals.rep_goal
     if rep_goal and metrics.total_reps >= rep_goal and (metrics.average_physio_score or 0) >= 75 and packet.tracking_quality.data_quality != "low":
@@ -112,6 +126,11 @@ def local_fallback_analysis(packet: FinalSessionAnalysisPacketV2) -> GeminiSessi
         else "You completed structured practice data for review."
     )
     bonus = bonus_text(packet)
+    is_press = is_forward_press(packet)
+    if is_press and metrics.best_push_depth_cm:
+        spoken_extra = f" Best push depth was {metrics.best_push_depth_cm} cm."
+        if spoken_extra not in summary:
+            summary = f"{summary}{spoken_extra}"
     return GeminiSessionAnalysisTextV2(
         spoken_summary=clean_text(summary, "Session complete. Follow your therapist's plan.", 220),
         written_summary=clean_text(summary, "Session complete. Your local metrics are ready for review.", 420),
@@ -133,12 +152,14 @@ def compact_packet_for_gemini(packet: FinalSessionAnalysisPacketV2) -> dict[str,
         {
             "t_sec": point.t_sec,
             "angle": point.smoothed_elbow_angle if point.smoothed_elbow_angle is not None else point.raw_elbow_angle,
+            "push_depth_cm": point.push_depth_cm,
+            "distance_cm": point.distance_cm,
             "phase": point.phase,
             "rep": point.rep_count,
         }
         for point in trace
     ]
-    return {
+    payload: dict[str, Any] = {
         "exercise_id": packet.exercise_id,
         "exercise_name": packet.exercise_name,
         "session": {
@@ -159,6 +180,58 @@ def compact_packet_for_gemini(packet: FinalSessionAnalysisPacketV2) -> dict[str,
         "movement_trace_sample": compact_trace,
         "local_summary": packet.local_summary.model_dump(),
     }
+    if packet.patient_reported:
+        payload["patient_reported"] = packet.patient_reported
+    if packet.sensor_quality:
+        payload["sensor_quality"] = packet.sensor_quality.model_dump(exclude_none=True)
+    return payload
+
+
+def build_analysis_prompt(packet: FinalSessionAnalysisPacketV2, safe_packet: dict[str, Any]) -> str:
+    metrics = packet.aggregate_metrics
+    reps = metrics.total_reps
+    rep_goal = packet.goals.rep_goal
+    avg_score = metrics.average_physio_score
+    is_press = is_forward_press(packet)
+
+    if is_press:
+        metric_hint = (
+            "Mention the rep count, best push depth in cm, sensor linearity if available, "
+            "and extension angle — not flexion ROM degrees."
+        )
+        written_hint = (
+            "Cover: reps completed vs goal, push depth (cm), sensor/tracking quality, "
+            "extension angle, hold times, pace, and one improvement tip."
+        )
+    else:
+        metric_hint = "Mention the rep count, best range of motion, and one key takeaway."
+        written_hint = (
+            "Cover: how many reps were completed vs goal, quality (score, jitter), range of motion achieved, "
+            "notable observations from the rep breakdown (e.g. hold times, pace), and one specific improvement tip."
+        )
+
+    return (
+        "You are a supportive physical therapy exercise assistant writing a detailed post-session summary "
+        "for a patient who just completed a home exercise session. "
+        "You are NOT diagnosing, prescribing treatment, or replacing a licensed physical therapist. "
+        "Use ONLY the structured session data provided. Do not invent injuries, pain, or medical conditions.\n\n"
+
+        "Return ONLY a JSON object with exactly these keys:\n"
+        f"  spoken_summary   — 2-3 warm, natural sentences read aloud. {metric_hint}\n"
+        f"  written_summary  — 4-6 sentences for display. {written_hint}\n"
+        "  what_went_well   — 1-2 encouraging sentences referencing specific strengths from the data.\n"
+        "  focus_next_time  — 1-2 concrete, actionable sentences with a specific technique cue.\n"
+        "  safety_note      — One short safety reminder in non-diagnostic language.\n"
+        "  bonus_rep_suggestion — ONLY 'If it feels comfortable, try one extra controlled rep next time.' "
+        f"if reps={reps} >= goal={rep_goal} AND avg_score >= 75 and no sharp pain reported. Otherwise empty string.\n"
+        "  return_suggestion — Must contain: 'Follow your therapist's plan. Based on today's session, "
+        "return for another short practice session when scheduled.' You may add one sentence.\n\n"
+
+        "Rules: No diagnosis. No treatment promises. No injury claims. No unscheduled training advice. "
+        "Be warm, specific, and concise.\n\n"
+
+        f"Session data: {json.dumps(safe_packet, sort_keys=True)}"
+    )
 
 
 class GeminiSessionAnalysisV2Provider:
@@ -209,43 +282,7 @@ class GeminiSessionAnalysisV2Provider:
             )
 
         safe_packet = compact_packet_for_gemini(packet)
-        metrics = packet.aggregate_metrics
-        reps = metrics.total_reps
-        rep_goal = packet.goals.rep_goal
-        best_rom = metrics.best_range_of_motion
-        avg_score = metrics.average_physio_score
-        avg_hold = metrics.average_hold_time_sec
-        avg_jitter = metrics.average_jitter_score
-
-        prompt = (
-            "You are a supportive physical therapy exercise assistant writing a detailed post-session summary "
-            "for a patient who just completed a home exercise session. "
-            "You are NOT diagnosing, prescribing treatment, or replacing a licensed physical therapist. "
-            "Use ONLY the structured session data provided. Do not invent injuries, pain, or medical conditions.\n\n"
-
-            "Return ONLY a JSON object with exactly these keys:\n"
-            "  spoken_summary   — 2-3 warm, natural sentences read aloud by a voice assistant. "
-            "Mention the rep count, best range of motion, and one key takeaway. Be conversational and encouraging.\n"
-            "  written_summary  — 4-6 sentences for display on screen. "
-            "Cover: how many reps were completed vs goal, quality (score, jitter), range of motion achieved, "
-            "notable observations from the rep breakdown (e.g. hold times, pace), and one specific improvement tip. "
-            "Be specific with numbers from the data.\n"
-            "  what_went_well   — 1-2 encouraging sentences. Reference specific strengths from the data "
-            "(e.g. consistent hold time, good score, smooth movement).\n"
-            "  focus_next_time  — 1-2 concrete, actionable sentences. Reference the most common issue or "
-            "lowest-scoring rep. Give a specific technique cue.\n"
-            "  safety_note      — One short safety reminder in non-diagnostic language.\n"
-            "  bonus_rep_suggestion — ONLY 'If it feels comfortable, try one extra controlled rep next time.' "
-            f"if reps={reps} >= goal={rep_goal} AND avg_score >= 75. Otherwise empty string.\n"
-            "  return_suggestion — Must contain: 'Follow your therapist's plan. Based on today's session, "
-            "return for another short practice session when scheduled.' You may add one sentence.\n\n"
-
-            "Rules: No diagnosis. No treatment promises. No injury claims. No unscheduled training advice. "
-            "Be warm, specific, and concise. The movement_trace_sample is a sparse angle trace — "
-            "use it only as a secondary check on smoothness and pacing.\n\n"
-
-            f"Session data: {json.dumps(safe_packet, sort_keys=True)}"
-        )
+        prompt = build_analysis_prompt(packet, safe_packet)
         try:
             parsed: dict[str, Any] | None = None
             last_exc: BaseException | None = None

@@ -3641,9 +3641,10 @@ button:disabled {
 /* ── Results page ────────────────────────────────────────────── */
 
 .results-page {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 clamp(20px, 4vw, 56px) 80px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 80px;
 }
 
 .results-page-header {
@@ -3954,5 +3955,673 @@ button:disabled {
   .hdetail-rep-table .hdr-head:nth-child(6),
   .hdetail-rep-table > span:nth-child(7n) {
     display: none;
+  }
+}
+
+/* ── Results flow, check-in, therapist note ─────────────────────────── */
+
+.safety-disclaimer {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 180, 80, 0.25);
+  border-radius: 10px;
+  background: rgba(255, 180, 80, 0.06);
+  margin-bottom: 16px;
+}
+
+.demo-banner {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(120, 160, 255, 0.12);
+  border: 1px solid rgba(120, 160, 255, 0.25);
+  margin-bottom: 16px;
+  font-size: 0.92rem;
+}
+
+.demo-fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.results-flow-stepper {
+  display: grid;
+  gap: 20px;
+}
+
+.results-flow-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.results-flow-dot {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.results-flow-dot.active {
+  color: var(--text);
+  border-color: rgba(120, 220, 180, 0.35);
+}
+
+.results-flow-dot.current {
+  background: rgba(120, 220, 180, 0.12);
+}
+
+.results-flow-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.patient-checkin-panel,
+.therapist-note-panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: clamp(18px, 2vw, 28px);
+  background: var(--panel);
+  width: 100%;
+}
+
+.feedback-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.feedback-chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.feedback-chip.active {
+  border-color: rgba(120, 220, 180, 0.45);
+  background: rgba(120, 220, 180, 0.12);
+}
+
+.patient-checkin-input {
+  width: 100%;
+  min-height: 88px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 12px;
+  resize: vertical;
+}
+
+.patient-checkin-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.patient-checkin-response {
+  padding-top: 8px;
+}
+
+.therapist-note-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.therapist-note-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.therapist-note-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.therapist-note-row dt {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.therapist-note-row dd {
+  margin: 0;
+}
+
+.progress-trend-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.trend-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--panel);
+  display: grid;
+  gap: 6px;
+}
+
+.trend-card span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.primary-btn,
+.secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.primary-btn {
+  background: rgba(120, 220, 180, 0.18);
+  border-color: rgba(120, 220, 180, 0.35);
+  color: var(--text);
+}
+
+.secondary-btn {
+  background: transparent;
+  color: var(--text);
+}
+
+.safety-disclaimer-inline {
+  margin-top: 8px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.summary-step-lead {
+  font-size: 1.05rem;
+  margin: 0;
+  color: var(--text);
+}
+
+.session-summary-step {
+  display: grid;
+  gap: 24px;
+  width: 100%;
+}
+
+.summary-step-layout {
+  display: grid;
+  grid-template-columns: minmax(380px, 1.15fr) minmax(420px, 1fr);
+  gap: clamp(20px, 3vw, 36px);
+  align-items: start;
+  width: 100%;
+}
+
+.summary-step-left {
+  min-width: 0;
+}
+
+.summary-step-right {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.summary-panel--local {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: clamp(18px, 2vw, 28px);
+  background: var(--panel);
+  width: 100%;
+}
+
+.summary-panel--local .summary-metric-grid,
+.summary-panel--local .summary-metric-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.summary-panel--local .rep-breakdown-table {
+  font-size: 0.88rem;
+}
+
+.summary-local-title {
+  font-size: 1.05rem;
+  margin: 0 0 8px;
+  line-height: 1.35;
+}
+
+.summary-local-rec {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.summary-metric-grid--compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-step-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.summary-step-ai {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: clamp(18px, 2vw, 28px);
+  background: var(--panel);
+  width: 100%;
+}
+
+.summary-step-replay {
+  width: 100%;
+}
+
+.summary-step-replay .replay-overlay {
+  min-height: 280px;
+}
+
+.results-flow-stepper {
+  width: 100%;
+}
+
+.results-page--focused {
+  width: 100%;
+  max-width: none;
+}
+
+.ai-summary-compact {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-highlight {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.summary-step-voice {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.results-flow-dot {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+}
+
+@media (min-width: 1280px) {
+  .summary-step-layout {
+    grid-template-columns: minmax(480px, 1.25fr) minmax(520px, 1fr);
+    gap: 40px;
+  }
+}
+
+.checkin-coach-stage {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 14px;
+  background: #111;
+  color: #f5f5f5;
+}
+
+.checkin-coach-blob-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blob-coach--lg {
+  width: 88px;
+  height: 88px;
+}
+
+.blob-coach--lg .blob-coach__shape {
+  width: 72px;
+  height: 72px;
+}
+
+.checkin-coach-speech {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.08);
+}
+
+.voice-record-btn--active {
+  border-color: rgba(255, 90, 90, 0.55);
+  background: rgba(255, 90, 90, 0.12);
+  color: #ff6b6b;
+}
+
+.patient-checkin-input-wrap {
+  position: relative;
+}
+
+.patient-checkin-input-wrap--recording .patient-checkin-input {
+  border-color: rgba(255, 90, 90, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 90, 90, 0.15);
+}
+
+.recording-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 90, 90, 0.1);
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.recording-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ff8a8a;
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+
+.voice-record-input__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.voice-lab-debug {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin-top: 12px;
+}
+
+.voice-lab-debug__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.voice-lab-debug__tts-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.voice-debug-json {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow: auto;
+  max-height: 220px;
+}
+
+.voice-input-test-card h2 {
+  margin: 4px 0 8px;
+  font-size: 1.35rem;
+}
+
+.voice-input-test {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.voice-input-test__box {
+  width: 100%;
+  min-height: 120px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.voice-input-test__box:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--mint) 60%, var(--line));
+}
+
+.voice-input-test__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.voice-input-test__record--active {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
+.voice-input-test__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #ff6b6b;
+}
+
+.voice-debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.voice-debug-env {
+  margin-bottom: 4px;
+}
+
+.voice-debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.voice-debug-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #8a8a8a);
+}
+
+.voice-debug-transcript {
+  width: 100%;
+  resize: vertical;
+}
+
+.voice-debug-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6ee7a0;
+}
+
+.voice-debug-segments ul {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.voice-debug-segments li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 0.9rem;
+}
+
+.voice-debug-segments time {
+  flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--muted, #8a8a8a);
+}
+
+.checkin-thread {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.checkin-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.checkin-message--coach {
+  background: var(--panel-2);
+}
+
+.checkin-message-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.progress-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.compare-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--panel);
+  display: grid;
+  gap: 6px;
+}
+
+.compare-card span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.trend-pill {
+  font-style: normal;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.trend-pill--up { color: var(--mint); }
+.trend-pill--down { color: var(--coral); }
+
+.progress-session-table {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.progress-session-head,
+.progress-session-row {
+  display: grid;
+  grid-template-columns: 90px 1.2fr 70px 60px 80px 70px 90px;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 0.84rem;
+}
+
+.progress-session-head {
+  background: var(--panel-2);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+.progress-session-row {
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+.summary-panel--compact {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.summary-metric-grid--compact {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+@media (max-width: 860px) {
+  .summary-step-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-panel--local .summary-metric-grid,
+  .summary-panel--local .summary-metric-grid--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .summary-step-grid {
+    grid-template-columns: 1fr;
+  }
+  .progress-session-head,
+  .progress-session-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .checkin-coach-stage {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
   }
 }

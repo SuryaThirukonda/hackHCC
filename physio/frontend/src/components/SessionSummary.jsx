@@ -1,32 +1,52 @@
 import { Activity, ClipboardCheck, Clock3, Gauge, Repeat2, ShieldCheck, Target, Waves } from "lucide-react";
 import MetricCard from "./MetricCard.jsx";
 
-export default function SessionSummary({ summary, aiSummaryText, aiHealthReport, compact = false }) {
+export default function SessionSummary({
+  summary,
+  aiSummaryText,
+  aiHealthReport,
+  compact = false,
+  showAiSummary = true,
+  compactMetrics = false,
+  localAnalysisOnly = false,
+}) {
   const forwardPress = summary?.exercise === "seated_one_arm_forward_press";
+  const showHeader = !compact && !compactMetrics && !localAnalysisOnly;
+  const showLocalText = localAnalysisOnly || (!compactMetrics && !compact);
+
   return (
-    <section className="summary-panel">
-      {!compact && (
+    <section className={`summary-panel${compactMetrics && !localAnalysisOnly ? " summary-panel--compact" : ""}${localAnalysisOnly ? " summary-panel--local" : ""}`}>
+      {showHeader && (
         <div className="summary-icon">
           <ClipboardCheck size={20} />
         </div>
       )}
       <div>
-        {!compact && <p className="eyebrow">Latest summary</p>}
+        {localAnalysisOnly && <p className="eyebrow">Local session analysis</p>}
+        {!compact && !compactMetrics && !localAnalysisOnly && <p className="eyebrow">Session analysis</p>}
         {summary ? (
           <>
-            <h2>{summary.summary_text}</h2>
-            <p>{summary.recommendation_text}</p>
-            <div className="ai-summary-box">
-              <p className="eyebrow">AI-written session summary</p>
-              <strong>{aiSummaryText || summary.recommendation_text}</strong>
-            </div>
-            {aiHealthReport && (
-              <div className="ai-summary-box ai-health-box">
-                <p className="eyebrow">AI health observations</p>
-                <p>{aiHealthReport}</p>
-              </div>
+            {showLocalText && (
+              <>
+                <h2 className={localAnalysisOnly ? "summary-local-title" : ""}>{summary.summary_text}</h2>
+                <p className="summary-local-rec">{summary.recommendation_text}</p>
+              </>
             )}
-            <div className="summary-metric-grid">
+            {showAiSummary && (
+              <>
+                <div className="ai-summary-box">
+                  <p className="eyebrow">AI-written session summary</p>
+                  <strong>{aiSummaryText || summary.recommendation_text}</strong>
+                </div>
+                {aiHealthReport && (
+                  <div className="ai-summary-box ai-health-box">
+                    <p className="eyebrow">AI health observations</p>
+                    <p>{aiHealthReport}</p>
+                  </div>
+                )}
+              </>
+            )}
+            <div className={`summary-metric-grid${compactMetrics || localAnalysisOnly ? " summary-metric-grid--compact" : ""}`}>
               <MetricCard icon={Activity} label="Exercise" value={exerciseLabel(summary.exercise)} accent="mint" />
               <MetricCard icon={Clock3} label="Session time" value={formatSummaryMetric(summary.duration_sec, 0)} unit="s" accent="blue" />
               <MetricCard icon={Repeat2} label="Total reps" value={summary.total_reps ?? "--"} accent="coral" />

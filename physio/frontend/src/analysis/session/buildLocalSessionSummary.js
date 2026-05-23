@@ -20,7 +20,33 @@ function commonIssue(issueCounts) {
   return count > 0 ? issue : "none";
 }
 
+function inferZeroRepReasonForPress({ packets, exercise }) {
+  if (!packets.length) return ZERO_REP_REASONS.SESSION_TOO_SHORT;
+  const validPackets = packets.filter((packet) => packet?.angle_valid !== false && packet?.coach_state !== "low_confidence");
+  if (!validPackets.length || validPackets.length / packets.length < 0.3) return ZERO_REP_REASONS.TRACKING_LOST;
+  const sensorOffline = validPackets.every((packet) => packet?.sensor_status === "offline" || packet?.distance_cm == null);
+  if (sensorOffline) return ZERO_REP_REASONS.SENSOR_UNAVAILABLE;
+  const elbowAngles = validPackets.map((packet) => packet.smoothed_elbow_angle ?? packet.elbow_angle).filter(Number.isFinite);
+  if (!elbowAngles.length) return ZERO_REP_REASONS.TRACKING_LOST;
+  const maxElbow = Math.max(...elbowAngles);
+  const minElbow = Math.min(...elbowAngles);
+  const targetMin = exercise?.targetPosition?.elbowAngleMin ?? 145;
+  const bentMax = exercise?.startPosition?.elbowAngleMax ?? 115;
+  if (maxElbow < targetMin) return ZERO_REP_REASONS.EXTENSION_NOT_REACHED;
+  if (packets.some((packet) => packet?.rep_phase === "holding" || packet?.analyzer_output?.phase === "EXTENDED_HOLD")) {
+    return ZERO_REP_REASONS.HOLD_TOO_SHORT;
+  }
+  const pushDepths = validPackets.map((packet) => packet.push_depth_cm).filter(Number.isFinite);
+  if (pushDepths.length && Math.max(...pushDepths) < (exercise?.minPushDepthCm ?? 6)) {
+    return ZERO_REP_REASONS.SHORT_PUSH_DEPTH;
+  }
+  if (minElbow > bentMax) return ZERO_REP_REASONS.DID_NOT_RETURN_TO_BENT;
+  return ZERO_REP_REASONS.NO_VALID_REPS;
+}
+
 function inferZeroRepReason({ packets, exercise }) {
+  const isForwardPress = exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
+  if (isForwardPress) return inferZeroRepReasonForPress({ packets, exercise });
   if (!packets.length) return ZERO_REP_REASONS.SESSION_TOO_SHORT;
   const validPackets = packets.filter((packet) => packet?.angle_valid !== false && packet?.coach_state !== "low_confidence");
   if (!validPackets.length || validPackets.length / packets.length < 0.3) return ZERO_REP_REASONS.TRACKING_LOST;
@@ -65,6 +91,8 @@ function buildLowFrameRateTrace(packets, targetGapMs = 500, limit = 40) {
       smoothed_elbow_angle: round(smoothedElbow, 1),
       angle_residual: round(packet.angle_residual, 1),
       jitter_score: round(packet.smoothing_jitter_score ?? packet.combined_jitter_score, 3),
+      distance_cm: round(packet.distance_cm, 1),
+      push_depth_cm: round(packet.push_depth_cm ?? packet.analyzer_output?.push_depth_cm, 1),
       phase: packet.analyzer_output?.phase || packet.rep_phase || null,
       rep_count: packet.rep_count ?? 0,
       confidence: round(packet.landmark_confidence, 2),

@@ -1,7 +1,7 @@
 import { Camera, Loader2, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPoseSignalSmoother } from "../analysis/smoothing/poseSignalSmoother.js";
-import { SMOOTHED_EXERCISE_IDS } from "../analysis/smoothing/smoothingConfig.js";
+import { SMOOTHED_EXERCISE_IDS, smoothingConfigForExercise } from "../analysis/smoothing/smoothingConfig.js";
 import { createElbowFlexionAnalyzer } from "../analyzers/elbowFlexionAnalyzer.js";
 import { createPushMotionAnalyzer } from "../analyzers/pushMotionAnalyzer.js";
 import { postPacket } from "../api/client.js";
@@ -360,7 +360,7 @@ export default function BrowserPoseOverlay({
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
   const analyzerRef = useRef(createAnalyzerForExercise(exercise));
-  const smootherRef = useRef(createPoseSignalSmoother());
+  const smootherRef = useRef(createPoseSignalSmoother(smoothingConfigForExercise(exercise?.id)));
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
   const calibrationReadyUntilRef = useRef(0);
@@ -505,7 +505,7 @@ export default function BrowserPoseOverlay({
   }, [debugMode]);
   useEffect(() => {
     analyzerRef.current = createAnalyzerForExercise(exercise);
-    smootherRef.current.reset();
+    smootherRef.current = createPoseSignalSmoother(smoothingConfigForExercise(exercise?.id));
     previousSessionRef.current = sessionId;
     calibrationRef.current = { compressedCm: null, stretchedCm: null };
     routineStartedRef.current = false;
@@ -739,7 +739,7 @@ export default function BrowserPoseOverlay({
         )
       : null;
 
-    const smootherEnabled = !isForwardPress && SMOOTHED_EXERCISE_IDS.has(exercise?.id || "elbow_flexion_extension");
+    const smootherEnabled = SMOOTHED_EXERCISE_IDS.has(exercise?.id || "elbow_flexion_extension");
     const smoothedFrame = smootherEnabled
       ? smootherRef.current.update({
         timestampMs,
@@ -759,7 +759,22 @@ export default function BrowserPoseOverlay({
     let combinedJitter;
     let currentRange;
 
-    if (isForwardPress) {
+    if (isForwardPress && smootherEnabled && smoothedFrame) {
+      analyzerElbowAngle = smoothedFrame.smoothed.elbowAngle;
+      analyzerShoulderAngle = smoothedFrame.smoothed.shoulderAngle;
+      analyzerValid = smoothedFrame.validity.valid;
+      motion = updateMotion(samplesRef.current, timestampMs, analyzerValid ? analyzerElbowAngle : null);
+      combinedJitter = analyzerValid
+        ? Math.max(smoothedFrame.jitter.cameraJitterScore, packetCalibrationComplete ? 0 : sensorJitterScore)
+        : 0;
+      currentRange = analyzerValid && exercise?.targetPosition
+        ? analyzerElbowAngle <= exercise.targetPosition.elbowAngleMax && analyzerElbowAngle >= exercise.targetPosition.elbowAngleMin
+          ? "target_met"
+          : analyzerElbowAngle < exercise.targetPosition.elbowAngleMin
+            ? "almost_there"
+            : "overextended"
+        : "unknown";
+    } else if (isForwardPress) {
       motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
       analyzerElbowAngle = (validAnalysis && motion.smoothedAngle != null)
         ? motion.smoothedAngle
@@ -875,21 +890,21 @@ export default function BrowserPoseOverlay({
       jitter_detected: isForwardPress
         ? validAnalysis && Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0) > 0.65
         : analyzerValid && (combinedJitter > 0.45 || (smoothedFrame?.jitter?.peakJitterScore ?? 0) > 0.7),
-      shoulder_angle: isForwardPress
-        ? (validAnalysis ? Number(upperArmAngle.toFixed(1)) : null)
-        : (analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null),
-      elbow_angle: isForwardPress
-        ? (validAnalysis ? Number(elbowAngle.toFixed(1)) : null)
-        : (analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null),
-      elbow_angle_smoothed: isForwardPress && validAnalysis && motion.smoothedAngle != null
-        ? Number(motion.smoothedAngle.toFixed(1))
-        : null,
-      raw_shoulder_angle: !isForwardPress && validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
-      raw_elbow_angle: !isForwardPress && validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
-      smoothed_shoulder_angle: !isForwardPress && analyzerValid && analyzerShoulderAngle != null
+      shoulder_angle: analyzerValid && analyzerShoulderAngle != null
+        ? Number(analyzerShoulderAngle.toFixed(1))
+        : (validAnalysis ? Number(upperArmAngle.toFixed(1)) : null),
+      elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
+      elbow_angle_smoothed: analyzerValid && analyzerElbowAngle != null
+        ? Number(analyzerElbowAngle.toFixed(1))
+        : (isForwardPress && validAnalysis && motion.smoothedAngle != null
+          ? Number(motion.smoothedAngle.toFixed(1))
+          : null),
+      raw_shoulder_angle: validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
+      raw_elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
+      smoothed_shoulder_angle: analyzerValid && analyzerShoulderAngle != null
         ? Number(analyzerShoulderAngle.toFixed(1))
         : null,
-      smoothed_elbow_angle: !isForwardPress && analyzerValid && analyzerElbowAngle != null
+      smoothed_elbow_angle: analyzerValid && analyzerElbowAngle != null
         ? Number(analyzerElbowAngle.toFixed(1))
         : null,
       smoothing_jitter_score: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.cameraJitterScore : null,
@@ -897,9 +912,9 @@ export default function BrowserPoseOverlay({
       velocity_residual_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.velocityResidualDegPerSec : null,
       trend_direction: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowDirection : null,
       trend_velocity_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowVelocityDegPerSec : null,
-      validity_status: isForwardPress
-        ? (validAnalysis ? "good" : "invalid")
-        : (smootherEnabled && smoothedFrame ? smoothedFrame.validity.confidenceLabel : (validAnalysis ? "good" : "invalid")),
+      validity_status: smootherEnabled && smoothedFrame
+        ? smoothedFrame.validity.confidenceLabel
+        : (validAnalysis ? "good" : "invalid"),
       raw_validity_status: smootherEnabled && smoothedFrame ? smoothedFrame.validity.reason : angleRejectionReason,
       stable_tracking: smootherEnabled && smoothedFrame ? smoothedFrame.stableFlags.isTrackingStable : validAnalysis,
       stable_straight: smootherEnabled && smoothedFrame ? smoothedFrame.stableFlags.isStraightStable : false,

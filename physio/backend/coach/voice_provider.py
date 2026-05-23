@@ -29,7 +29,7 @@ class ElevenLabsVoiceProvider:
         self.api_key = env_secret("ELEVENLABS_API_KEY")
         self.voice_id = env_secret("ELEVENLABS_VOICE_ID")
         self.model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
-        self.timeout_sec = float(os.getenv("ELEVENLABS_TIMEOUT_SEC", "4"))
+        self.timeout_sec = float(os.getenv("ELEVENLABS_TIMEOUT_SEC", "60"))
         self.audio_dir = audio_dir or Path(__file__).resolve().parents[1] / "data" / "audio"
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.fallback = MockVoiceProvider()
