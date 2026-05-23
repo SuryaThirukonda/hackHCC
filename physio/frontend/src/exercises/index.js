@@ -1,8 +1,10 @@
 import { elbowFlexionExtension } from "./elbowFlexionExtension.js";
 import { rightArmRaise } from "./rightArmRaise.js";
+import { seatedOneArmForwardPress } from "./seatedOneArmForwardPress.js";
 
 export const exercises = [
   elbowFlexionExtension,
+  seatedOneArmForwardPress,
   rightArmRaise,
   {
     id: "shoulder_flexion",

@@ -435,6 +435,12 @@ button:disabled {
   stroke-width: 2;
 }
 
+path.diagram-upper-arm,
+path.diagram-forearm {
+  fill: none;
+  stroke: #23313a;
+}
+
 .diagram-label-start {
   text-anchor: middle;
 }
@@ -1258,6 +1264,181 @@ button:disabled {
 
 .camera-debug {
   color: var(--mint);
+}
+
+.sensor-calibration-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(180px, 0.85fr) minmax(220px, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  border: 1px solid rgba(86, 216, 167, 0.34);
+  border-radius: 8px;
+  background: rgba(15, 17, 16, 0.88);
+  color: #f4f1e8;
+  padding: 12px;
+}
+
+.calibration-current {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sensor-calibration-panel .eyebrow {
+  color: #c8df65;
+  margin-bottom: 2px;
+}
+
+.sensor-calibration-panel .live-distance-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  border: 2px solid rgba(86, 216, 167, 0.88);
+  border-radius: 8px;
+  background: #f4f1e8;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  color: #0f1110;
+  font-family: var(--font-mono);
+  font-size: clamp(1.55rem, 2.8vw, 2.45rem);
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 8px 14px;
+  text-shadow: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calibration-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  min-width: 0;
+}
+
+.calibration-actions button {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(86, 216, 167, 0.34);
+  border-radius: 8px;
+  background: rgba(86, 216, 167, 0.14);
+  color: #f4f1e8;
+  font-weight: 800;
+  padding: 0 12px;
+}
+
+.calibration-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.calibration-actions .calibration-begin {
+  border-color: rgba(244, 185, 95, 0.58);
+  background: rgba(244, 185, 95, 0.2);
+}
+
+.calibration-values {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 0;
+  color: #f4f1e8;
+  font-size: 0.82rem;
+}
+
+.calibration-values span {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid rgba(244, 241, 232, 0.16);
+  border-radius: 8px;
+  background: rgba(244, 241, 232, 0.1);
+  padding: 10px;
+}
+
+.calibration-values em {
+  color: #a8ada6;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calibration-values strong {
+  min-width: 0;
+  color: #56d8a7;
+  font-family: var(--font-mono);
+  font-size: clamp(1rem, 1.5vw, 1.35rem);
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sensor-calibration-panel small {
+  grid-column: 1 / -1;
+  color: #f4b95f;
+  font-weight: 700;
+}
+
+.sensor-calibration-panel small.calibration-ready {
+  color: #56d8a7;
+}
+
+/* Auto-calibration progress bar */
+.cal-progress-bar-track {
+  grid-column: 1 / -1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(244, 241, 232, 0.10);
+  overflow: hidden;
+}
+.cal-progress-bar-fill {
+  height: 100%;
+  background: var(--mint);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+
+.calibration-scanning-hint {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+  color: var(--ink);
+  margin: 0;
+}
+.calibration-scanning-hint strong {
+  color: var(--mint);
+}
+
+.calibration-locked span {
+  color: var(--mint);
+}
+
+.calibration-reset-btn {
+  grid-column: 1 / -1;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+.calibration-reset-btn:hover {
+  border-color: var(--coral);
+  color: var(--coral);
 }
 
 .spin {
@@ -2647,6 +2828,18 @@ button:disabled {
   .camera-stage img,
   .browser-overlay-canvas {
     min-height: 280px;
+  }
+
+  .sensor-calibration-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .calibration-actions {
+    justify-content: stretch;
+  }
+
+  .calibration-actions button {
+    flex: 1;
   }
 
   .angle-mini-card {

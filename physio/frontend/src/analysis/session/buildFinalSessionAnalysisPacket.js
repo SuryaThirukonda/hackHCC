@@ -11,11 +11,14 @@ function compactRep(rep) {
   return {
     rep_index: rep.rep_index,
     range_of_motion: round(rep.range_of_motion, 1),
+    push_depth_cm: round(rep.push_depth_cm, 1),
+    max_extension_angle: round(rep.max_extension_angle, 1),
     hold_time_sec: round(rep.hold_time_sec, 1),
     rep_duration_sec: round(rep.rep_duration_sec, 1),
     pace: rep.pace || "unknown",
     jitter_score: round(rep.jitter_score, 2),
     shoulder_drift: round(rep.shoulder_drift, 1),
+    sensor_linearity_score: round(rep.sensor_linearity_score, 2),
     physio_score: Number.isFinite(rep.physio_score) ? Math.round(rep.physio_score) : null,
     issue: rep.issue || "none",
     clean: Boolean(rep.clean)
@@ -57,7 +60,12 @@ export function buildFinalSessionAnalysisPacket({ runner, exercise, sessionId, p
       raw_average_elbow_angle: localSummary.raw_average_elbow_angle,
       smoothed_average_elbow_angle: localSummary.smoothed_average_elbow_angle,
       raw_average_shoulder_angle: localSummary.raw_average_shoulder_angle,
-      smoothed_average_shoulder_angle: localSummary.smoothed_average_shoulder_angle
+      smoothed_average_shoulder_angle: localSummary.smoothed_average_shoulder_angle,
+      best_push_depth_cm: localSummary.best_push_depth_cm,
+      average_push_depth_cm: localSummary.average_push_depth_cm,
+      average_extension_angle: localSummary.average_extension_angle,
+      average_shoulder_drift: localSummary.average_shoulder_drift,
+      average_sensor_linearity_score: localSummary.average_sensor_linearity_score
     },
     tracking_quality: localSummary.tracking_quality,
     movement_trace: localSummary.movement_trace || [],

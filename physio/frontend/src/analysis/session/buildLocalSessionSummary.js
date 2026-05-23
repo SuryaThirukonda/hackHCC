@@ -92,10 +92,16 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
     ...reps.map((rep) => rep.physio_score),
     ...validPackets.map((packet) => packet.physio_score)
   ].filter(Number.isFinite);
+  const isForwardPress = exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
   const rangeValues = reps.map((rep) => rep.range_of_motion).filter(Number.isFinite);
+  const pushDepthValues = reps.map((rep) => rep.push_depth_cm).filter(Number.isFinite);
+  const extensionAngleValues = reps.map((rep) => rep.max_extension_angle).filter(Number.isFinite);
+  const shoulderDriftValues = reps.map((rep) => rep.shoulder_drift).filter(Number.isFinite);
+  const linearityValues = reps.map((rep) => rep.sensor_linearity_score).filter(Number.isFinite);
   const holdValues = reps.map((rep) => rep.hold_time_sec).filter(Number.isFinite);
   const durationValues = reps.map((rep) => rep.rep_duration_sec).filter(Number.isFinite);
   const issueCounts = {
+    short_push_depth: reps.filter((rep) => rep.issue === "short_push_depth").length,
     did_not_bend_enough: reps.filter((rep) => rep.issue === "did_not_bend_enough").length,
     did_not_hold_long_enough: reps.filter((rep) => (rep.hold_time_sec ?? 0) < (exercise?.holdSeconds ?? 1)).length,
     moved_too_fast: reps.filter((rep) => rep.pace === "too_fast").length,
@@ -133,6 +139,11 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
     average_angle: round(average(rangeValues) ?? 0, 1),
     best_range_of_motion: round(Math.max(...rangeValues, 0), 1),
     average_range_of_motion: round(average(rangeValues) ?? 0, 1),
+    best_push_depth_cm: round(Math.max(...pushDepthValues, 0), 1),
+    average_push_depth_cm: round(average(pushDepthValues) ?? 0, 1),
+    average_extension_angle: round(average(extensionAngleValues) ?? 0, 1),
+    average_shoulder_drift: round(average(shoulderDriftValues) ?? 0, 1),
+    average_sensor_linearity_score: round(average(linearityValues) ?? 0, 2),
     average_hold_time_sec: round(average(holdValues) ?? 0, 1),
     average_rep_duration_sec: round(average(durationValues) ?? 0, 1),
     average_physio_score: Math.round(average(scoreValues) ?? 0),
@@ -167,7 +178,9 @@ export function buildLocalSessionSummary({ runner, exercise, sessionId, painLeve
     },
     completed_reps: reps,
     summary_text: reps.length
-      ? `User completed ${reps.length} ${reps.length === 1 ? "rep" : "reps"} with ${round(Math.max(...rangeValues, 0), 1)} degrees best range of motion.`
+      ? (isForwardPress
+        ? `User completed ${reps.length} ${reps.length === 1 ? "press" : "presses"} with ${round(Math.max(...pushDepthValues, 0), 1)} cm best push depth.`
+        : `User completed ${reps.length} ${reps.length === 1 ? "rep" : "reps"} with ${round(Math.max(...rangeValues, 0), 1)} degrees best range of motion.`)
       : `No valid reps were completed. Reason: ${zeroRepReason?.replaceAll("_", " ")}.`,
     recommendation_text: recommendationForIssue(issue),
     warnings: [

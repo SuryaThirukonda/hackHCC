@@ -28,6 +28,13 @@ CoachState = Literal[
     "error"
 ]
 PacketSource = Literal["python_opencv", "browser_mediapipe", "mock"]
+ExerciseId = Literal[
+    "elbow_flexion_extension",
+    "seated_one_arm_forward_press",
+    "right_arm_raise",
+    "shoulder_flexion",
+    "wrist_extension",
+]
 
 
 class SensorPacket(BaseModel):
@@ -50,7 +57,7 @@ class PosePacket(BaseModel):
     timestamp_ms: int
     camera_status: CameraStatus
     landmark_confidence: float = Field(ge=0, le=1)
-    exercise: str = "elbow_flexion_extension"
+    exercise: ExerciseId = "elbow_flexion_extension"
     side: Side = "right"
     shoulder_angle: float | None
     elbow_angle: float | None
@@ -68,7 +75,7 @@ class PhysioPacket(BaseModel):
     source: PacketSource = "mock"
     session_id: str
     timestamp_ms: int
-    exercise: str = "elbow_flexion_extension"
+    exercise: ExerciseId = "elbow_flexion_extension"
     side: Side = "right"
     device_id: str
     sensor_status: SensorStatus
@@ -124,7 +131,7 @@ class PhysioPacket(BaseModel):
 
 class SessionStartRequest(BaseModel):
     user_id: str = "demo-user"
-    exercise: str = "elbow_flexion_extension"
+    exercise: ExerciseId = "elbow_flexion_extension"
     side: Side = "right"
     target_angle: float = 90
 
@@ -143,7 +150,7 @@ class SessionEndRequest(BaseModel):
 class SessionSummary(BaseModel):
     session_id: str
     user_id: str
-    exercise: str
+    exercise: ExerciseId
     side: Side
     started_at_ms: int
     ended_at_ms: int

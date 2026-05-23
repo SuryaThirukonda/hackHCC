@@ -1,25 +1,39 @@
 const PHASE_VOICE = {
-  WAITING_FOR_START: "Hold your arm straight to start.",
-  STRAIGHTEN_TO_START: "Nice and easy. Straighten your arm before the next curl.",
-  EXTENDED_READY: "Great. Now bend your elbow slowly.",
-  FLEXING: "Beautiful control. Curl inward, slow and smooth.",
-  FLEXED_HOLD: "Great. Now hold it right there.",
-  HOLD_COMPLETE: "Now slowly extend your arm.",
-  EXTENDING: "Great work. Straighten your arm with control.",
-  REP_COMPLETE: "Wonderful rep. Rest a moment, then continue.",
-  SESSION_COMPLETE: "Great work. Session complete. Follow your therapist's plan for your next session."
+  CALIBRATION_READY: "Calibration set. Begin now.",
+  WAITING_FOR_START: "Arm straight to start.",
+  STRAIGHTEN_TO_START: "Straighten first.",
+  EXTENDED_READY: "Bend slowly.",
+  FLEXING: "Curl slowly.",
+  FLEXED_HOLD: "Hold there.",
+  HOLD_COMPLETE: "Extend now.",
+  EXTENDING: "Straighten slowly.",
+  WAITING_FOR_TRACKING: "Bend to start.",
+  MOVE_TO_BENT: "Move to bent.",
+  START_BENT_HOLD: "Hold bent.",
+  START_BENT_READY: "Press forward.",
+  PUSHING: "Press smoothly.",
+  EXTENDED_HOLD: "Hold reach.",
+  RETURNING: "Return slowly.",
+  REP_COMPLETE: "Good rep.",
+  SESSION_COMPLETE: "Session complete."
 };
 
 const STATE_VOICE = {
-  straighten_more: "Gently extend your elbow a little more.",
-  bend_more: "Bend a little deeper into the target zone.",
-  hold_longer: "Pause at the bend for one calm breath.",
-  too_fast: "Slow down. Smooth movement keeps you safe.",
-  too_jittery: "Steady your arm. Smaller movements feel better.",
-  keep_upper_arm_still: "Keep your upper arm quiet while you move.",
-  low_confidence: "Shift so your shoulder, elbow, and wrist stay visible.",
-  good_form: "You're on track. Keep this calm pace.",
-  rep_complete: "Strong rep. Settle your breath before the next one."
+  straighten_more: "Straighten more.",
+  bend_more: "Bend deeper.",
+  hold_longer: "Hold briefly.",
+  too_fast: "Slow down.",
+  too_jittery: "Move smoothly.",
+  keep_upper_arm_still: "Keep arm level.",
+  low_confidence: "Keep arm visible.",
+  good_form: "Keep control.",
+  almost_there: "Stay with it.",
+  rep_complete: "Good rep.",
+  // Chest-press framing cues — spoken when arm is outside optimal camera zone
+  frame_too_far: "Come closer to the camera.",
+  frame_too_close: "Step back from the camera.",
+  frame_arm_missing: "Move your arm fully into view.",
+  frame_arm_cut: "Reframe — part of your arm is cut off.",
 };
 
 export function phaseVoiceLine(phase) {

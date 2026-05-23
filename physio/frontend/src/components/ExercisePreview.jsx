@@ -2,8 +2,9 @@ import { ArrowLeft, Camera, CheckCircle2, Play, Target } from "lucide-react";
 import ExerciseMovementDiagram from "./ExerciseMovementDiagram.jsx";
 
 export default function ExercisePreview({ exercise, onBack, onBegin }) {
+  const forwardPress = exercise.movementType === "forward_press";
   const targetRange = exercise.targetPosition
-    ? `${exercise.targetPosition.elbowAngleMin}-${exercise.targetPosition.elbowAngleMax} degrees flexed`
+    ? `${exercise.targetPosition.elbowAngleMin}-${exercise.targetPosition.elbowAngleMax} degrees ${forwardPress ? "extended" : "flexed"}`
     : "Configured per exercise";
 
   return (
@@ -31,9 +32,9 @@ export default function ExercisePreview({ exercise, onBack, onBegin }) {
         </div>
 
         <div className="preview-facts">
-          <Fact icon={Target} label="Target angle range" value={targetRange} />
+          <Fact icon={Target} label={forwardPress ? "Target extension range" : "Target angle range"} value={targetRange} />
           <Fact icon={CheckCircle2} label="Rep goal" value={`${exercise.repGoal} controlled reps`} />
-          <Fact icon={Camera} label="Tracking" value="Live Webcam Analysis" />
+          <Fact icon={Camera} label="Tracking" value={forwardPress ? "Webcam + distance sensor" : "Live Webcam Analysis"} />
         </div>
 
         <button type="button" className="primary-wide" onClick={onBegin}>
@@ -45,8 +46,12 @@ export default function ExercisePreview({ exercise, onBack, onBegin }) {
         <ExerciseMovementDiagram exerciseId={exercise.id} />
         <div>
           <p className="eyebrow">Ideal movement preview</p>
-          <h3>Extend, bend, hold, straighten.</h3>
-          <p>This clinical diagram is instructional only. Live analysis still comes from webcam landmarks.</p>
+          <h3>{forwardPress ? "Bend, press, hold, return." : "Extend, bend, hold, straighten."}</h3>
+          <p>
+            {forwardPress
+              ? "This clinical diagram is instructional only. Live analysis uses webcam landmarks and distance packets."
+              : "This clinical diagram is instructional only. Live analysis still comes from webcam landmarks."}
+          </p>
         </div>
       </aside>
     </div>

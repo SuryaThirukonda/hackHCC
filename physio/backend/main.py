@@ -340,6 +340,9 @@ def _safe_ai_packet(packet: dict[str, Any]) -> dict[str, Any]:
         "elbow_angle",
         "target_elbow_range",
         "hold_time_sec",
+        "push_depth_cm",
+        "sensor_linearity_score",
+        "distance_cm",
         "pace",
         "jitter_score",
         "shoulder_drift",
@@ -428,7 +431,13 @@ def ai_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
                 "average_physio_score": summary.get("average_physio_score"),
                 "best_range_of_motion": summary.get("best_range_of_motion") or summary.get("best_angle"),
                 "average_range_of_motion": summary.get("average_range_of_motion") or summary.get("average_angle"),
+                "best_push_depth_cm": summary.get("best_push_depth_cm"),
+                "average_push_depth_cm": summary.get("average_push_depth_cm"),
+                "average_extension_angle": summary.get("average_extension_angle"),
+                "average_shoulder_drift": summary.get("average_shoulder_drift"),
+                "average_sensor_linearity_score": summary.get("average_sensor_linearity_score"),
                 "average_hold_time_sec": summary.get("average_hold_time_sec"),
+                "average_rep_duration_sec": summary.get("average_rep_duration_sec"),
                 "average_jitter_score": summary.get("average_jitter_score"),
             },
             tracking_quality={
@@ -502,6 +511,10 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         valid_angles = [packet.elbow_angle for packet in packets if packet.elbow_angle is not None]
         best_angle = min(valid_angles) if valid_angles else 0.0
         summary_angle_label = "best elbow flexion"
+    elif state.exercise == "seated_one_arm_forward_press":
+        valid_angles = [packet.elbow_angle for packet in packets if packet.elbow_angle is not None]
+        best_angle = max(valid_angles) if valid_angles else 0.0
+        summary_angle_label = "best elbow extension"
     else:
         valid_angles = [packet.shoulder_angle for packet in packets if packet.shoulder_angle is not None]
         best_angle = max(valid_angles) if valid_angles else 0.0
@@ -530,7 +543,11 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
         pain_level=request.pain_level,
         fatigue_level=request.fatigue_level,
         summary_text=f"User completed {total_reps} reps with {summary_angle_label} of {best_angle:.1f} degrees.",
-        recommendation_text="Focus on a controlled bend, brief hold, and smooth straighten phase.",
+        recommendation_text=(
+            "Focus on a slow, linear press and controlled return."
+            if state.exercise == "seated_one_arm_forward_press"
+            else "Focus on a controlled bend, brief hold, and smooth straighten phase."
+        ),
     )
     summary = coach_orchestrator.summarize_session(packets, fallback_summary)
     store.save_summary(summary)

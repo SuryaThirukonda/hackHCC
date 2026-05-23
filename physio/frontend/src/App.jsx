@@ -244,7 +244,7 @@ export default function App() {
     if (sourceMode !== "browser") return;
     setPacket(nextPacket);
     setError("");
-    if (isRecordingState(runner.status)) {
+    if (isRecordingState(runner.status) && nextPacket.calibration_complete !== false) {
       dispatchRunner({
         type: "PACKET_RECORDED",
         packet: nextPacket,
@@ -262,6 +262,17 @@ export default function App() {
       reason: "local_browser_packet"
     });
   }, [recorder, runner.status, sourceMode]);
+
+  const handleRoutineBegin = useCallback(() => {
+    setLive(true);
+    setActiveTab("live");
+    if (!isRecordingState(runner.status)) {
+      dispatchRunner({
+        type: RUNNER_EVENTS.START_SESSION,
+        startedAt: new Date().toISOString()
+      });
+    }
+  }, [runner.status]);
 
   useEffect(() => {
     if (runner.status !== RUNNER_STATES.ACTIVE) return;
@@ -720,6 +731,7 @@ export default function App() {
             sessionLabel={sessionLabel}
             frameTick={frameTick}
             onBrowserPacket={handleBrowserPacket}
+            onRoutineBegin={handleRoutineBegin}
             runnerStatus={runner.status}
             completedReps={runner.completedReps}
             countdownValue={countdownValue}
@@ -957,6 +969,7 @@ function LiveSessionPage({
   sessionLabel,
   frameTick,
   onBrowserPacket,
+  onRoutineBegin,
   runnerStatus,
   completedReps,
   countdownValue,
@@ -1010,6 +1023,7 @@ function LiveSessionPage({
           sessionId={sessionLabel}
           frameTick={frameTick}
           onBrowserPacket={onBrowserPacket}
+          onRoutineBegin={onRoutineBegin}
           showDebug={false}
           exercise={selectedExercise}
           exerciseTitle={selectedExercise.name}
@@ -1042,16 +1056,17 @@ function LiveSessionPage({
             <span>Confidence <strong>{packet ? packet.landmark_confidence.toFixed(3) : "--"}</strong></span>
           </div>
         </section>
-        <RepTimingPanel reps={completedReps} />
+        <RepTimingPanel reps={completedReps} exercise={selectedExercise} />
       </aside>
     </div>
   );
 }
 
-function RepTimingPanel({ reps = [] }) {
+function RepTimingPanel({ reps = [], exercise }) {
+  const forwardPress = exercise?.movementType === "forward_press";
   return (
     <section className="session-status-card">
-      <p className="eyebrow">Rep timing</p>
+      <p className="eyebrow">{forwardPress ? "Press timing" : "Rep timing"}</p>
       <h2>{reps.length} completed</h2>
       {reps.length ? (
         <div className="rep-timing-list">
@@ -1060,12 +1075,20 @@ function RepTimingPanel({ reps = [] }) {
               <strong>Rep {rep.rep_index}</strong>
               <span>{formatSeconds(rep.rep_duration_sec)} total</span>
               <span>{formatSeconds(rep.hold_time_sec)} hold</span>
-              <span>{formatMaybe(rep.range_of_motion)} deg ROM</span>
+              <span>
+                {forwardPress && Number.isFinite(rep.push_depth_cm)
+                  ? `${formatMaybe(rep.push_depth_cm)} cm press`
+                  : `${formatMaybe(rep.range_of_motion)} deg ROM`}
+              </span>
             </article>
           ))}
         </div>
       ) : (
-        <p className="muted">Complete a bend, hold, and straighten cycle to log rep timing.</p>
+        <p className="muted">
+          {forwardPress
+            ? "Complete a press, hold, and return cycle to log timing."
+            : "Complete a bend, hold, and straighten cycle to log rep timing."}
+        </p>
       )}
     </section>
   );
@@ -1205,6 +1228,8 @@ function HistoryCard({ session, expanded, onToggle }) {
 
   const bestRom = session.best_range_of_motion ?? session.best_angle;
   const avgRom = session.average_range_of_motion ?? session.average_angle;
+  const isForwardPressSession = session.exercise === "seated_one_arm_forward_press";
+  const bestPushDepth = session.best_push_depth_cm;
 
   return (
     <div className={`history-card${expanded ? " history-card--open" : ""}`}>
@@ -1219,8 +1244,12 @@ function HistoryCard({ session, expanded, onToggle }) {
           <span className="hstat-label">reps</span>
         </div>
         <div className="history-card-stat">
-          <span className="hstat-value">{Number.isFinite(bestRom) ? bestRom.toFixed(0) : "—"}</span>
-          <span className="hstat-label">best ROM°</span>
+          <span className="hstat-value">
+            {isForwardPressSession && Number.isFinite(bestPushDepth)
+              ? bestPushDepth.toFixed(0)
+              : Number.isFinite(bestRom) ? bestRom.toFixed(0) : "—"}
+          </span>
+          <span className="hstat-label">{isForwardPressSession ? "best cm" : "best ROM°"}</span>
         </div>
         <div className="history-card-stat">
           <span className="hstat-value">{session.average_physio_score ?? "—"}</span>
@@ -1259,12 +1288,22 @@ function HistoryCard({ session, expanded, onToggle }) {
               <span className="hds-value">{session.clean_reps ?? "—"}</span>
             </div>
             <div className="hdetail-stat">
-              <span className="hds-label">Best ROM</span>
-              <span className="hds-value">{Number.isFinite(bestRom) ? bestRom.toFixed(1) : "—"}<small>°</small></span>
+              <span className="hds-label">{isForwardPressSession ? "Best press" : "Best ROM"}</span>
+              <span className="hds-value">
+                {isForwardPressSession && Number.isFinite(bestPushDepth)
+                  ? bestPushDepth.toFixed(1)
+                  : Number.isFinite(bestRom) ? bestRom.toFixed(1) : "—"}
+                <small>{isForwardPressSession ? " cm" : "°"}</small>
+              </span>
             </div>
             <div className="hdetail-stat">
-              <span className="hds-label">Avg ROM</span>
-              <span className="hds-value">{Number.isFinite(avgRom) ? avgRom.toFixed(1) : "—"}<small>°</small></span>
+              <span className="hds-label">{isForwardPressSession ? "Avg press" : "Avg ROM"}</span>
+              <span className="hds-value">
+                {isForwardPressSession && Number.isFinite(session.average_push_depth_cm)
+                  ? session.average_push_depth_cm.toFixed(1)
+                  : Number.isFinite(avgRom) ? avgRom.toFixed(1) : "—"}
+                <small>{isForwardPressSession ? " cm" : "°"}</small>
+              </span>
             </div>
             <div className="hdetail-stat">
               <span className="hds-label">Avg hold</span>
@@ -1286,7 +1325,7 @@ function HistoryCard({ session, expanded, onToggle }) {
               <p className="eyebrow hdetail-reps-heading">Rep-by-rep breakdown</p>
               <div className="hdetail-rep-table">
                 <span className="hdr-head">Rep</span>
-                <span className="hdr-head">ROM°</span>
+                <span className="hdr-head">{isForwardPressSession ? "Press cm" : "ROM°"}</span>
                 <span className="hdr-head">Hold</span>
                 <span className="hdr-head">Duration</span>
                 <span className="hdr-head">Score</span>
@@ -1295,7 +1334,11 @@ function HistoryCard({ session, expanded, onToggle }) {
                 {session.completed_reps.map((rep) => (
                   <React.Fragment key={rep.rep_index}>
                     <span className="hdr-num">#{rep.rep_index}</span>
-                    <span>{Number.isFinite(rep.range_of_motion) ? rep.range_of_motion.toFixed(0) : "—"}</span>
+                    <span>
+                      {isForwardPressSession && Number.isFinite(rep.push_depth_cm)
+                        ? rep.push_depth_cm.toFixed(1)
+                        : Number.isFinite(rep.range_of_motion) ? rep.range_of_motion.toFixed(0) : "—"}
+                    </span>
                     <span>{Number.isFinite(rep.hold_time_sec) ? `${rep.hold_time_sec.toFixed(1)}s` : "—"}</span>
                     <span>{Number.isFinite(rep.rep_duration_sec) ? `${rep.rep_duration_sec.toFixed(1)}s` : "—"}</span>
                     <span className={rep.physio_score >= 70 ? "hdr-good" : rep.physio_score >= 50 ? "hdr-ok" : "hdr-bad"}>{rep.physio_score ?? "—"}</span>
@@ -1315,6 +1358,7 @@ function HistoryCard({ session, expanded, onToggle }) {
 function issueShort(issue) {
   return {
     did_not_bend_enough: "bend deeper",
+    short_push_depth: "short press",
     did_not_hold_long_enough: "hold longer",
     moved_too_fast: "too fast",
     too_jittery: "jittery",
@@ -1340,7 +1384,10 @@ function RefreshIcon({ spinning }) {
 }
 
 function exerciseLabelShort(id) {
-  return id === "elbow_flexion_extension" ? "Elbow Flexion" : id || "—";
+  return {
+    elbow_flexion_extension: "Elbow Flexion",
+    seated_one_arm_forward_press: "Forward Press"
+  }[id] || id || "—";
 }
 
 function DebugPage({

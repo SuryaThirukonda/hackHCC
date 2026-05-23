@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { createPoseSignalSmoother } from "../analysis/smoothing/poseSignalSmoother.js";
 import { SMOOTHED_EXERCISE_IDS } from "../analysis/smoothing/smoothingConfig.js";
 import { createElbowFlexionAnalyzer } from "../analyzers/elbowFlexionAnalyzer.js";
+import { createPushMotionAnalyzer } from "../analyzers/pushMotionAnalyzer.js";
 import { postPacket } from "../api/client.js";
+import { useSensorStream } from "../sensors/useSensorStream.js";
 
 const TARGET_ANGLE = 90;
 const DETECT_INTERVAL_MS = 33;
@@ -90,8 +92,88 @@ function exerciseTargetAngle(exercise) {
   return TARGET_ANGLE;
 }
 
+function createAnalyzerForExercise(exercise) {
+  if (exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press") {
+    return createPushMotionAnalyzer(exercise);
+  }
+  return createElbowFlexionAnalyzer(exercise);
+}
+
+// ---------------------------------------------------------------------------
+// Framing analysis — chest press specific
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks whether the arm fits the camera frame well for a chest-press exercise.
+ * All inputs are normalized MediaPipe coordinates (0–1 range).
+ * Returns { ok, cue, state } where cue is a spoken prompt or null.
+ */
+function analyzePressFaming(shoulder, elbow, wrist) {
+  if (!shoulder || !elbow || !wrist) {
+    return { ok: false, cue: "Move your arm fully into view.", state: "frame_arm_missing" };
+  }
+
+  const EDGE = 0.08;           // 8% from any edge
+  const MIN_SPAN = 0.20;       // arm span < 20% of frame → too far
+  const MAX_SPAN = 0.80;       // arm span > 80% of frame → too close
+
+  // Compute arm span in normalized space (shoulder→wrist distance)
+  const armSpan = Math.hypot(shoulder.x - wrist.x, shoulder.y - wrist.y);
+
+  if (armSpan < MIN_SPAN) {
+    return { ok: false, cue: "Come closer to the camera.", state: "frame_too_far" };
+  }
+  if (armSpan > MAX_SPAN) {
+    return { ok: false, cue: "Step back from the camera.", state: "frame_too_close" };
+  }
+  if (wrist.x < EDGE || elbow.x < EDGE) {
+    return { ok: false, cue: "Shift right — arm is cut off.", state: "frame_arm_cut" };
+  }
+  if (wrist.x > 1 - EDGE || elbow.x > 1 - EDGE) {
+    return { ok: false, cue: "Shift left — arm is cut off.", state: "frame_arm_cut" };
+  }
+  if (wrist.y < EDGE || elbow.y < EDGE) {
+    return { ok: false, cue: "Lower your arm into frame.", state: "frame_arm_cut" };
+  }
+  if (wrist.y > 1 - EDGE || elbow.y > 1 - EDGE) {
+    return { ok: false, cue: "Raise your arm into frame.", state: "frame_arm_cut" };
+  }
+
+  return { ok: true, cue: null, state: "frame_ok" };
+}
+
+/**
+ * Compute palm centre pixel from MediaPipe hand landmark array.
+ * Uses the 5 knuckle-base landmarks (0,5,9,13,17) that form the palm ring.
+ */
+function palmCenterFromHandLandmarks(landmarks, width, height) {
+  if (!landmarks?.length) return null;
+  const PALM_IDX = [0, 5, 9, 13, 17];
+  let sx = 0;
+  let sy = 0;
+  let count = 0;
+  for (const idx of PALM_IDX) {
+    const lm = landmarks[idx];
+    if (lm) { sx += lm.x; sy += lm.y; count++; }
+  }
+  if (!count) return null;
+  return { x: (sx / count) * width, y: (sy / count) * height };
+}
+
+function isForwardPressExercise(exercise) {
+  return exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
+}
+
 function repPhaseForAnalyzerPhase(phase) {
   return {
+    CALIBRATION_READY: "idle",
+    WAITING_FOR_TRACKING: "idle",
+    MOVE_TO_BENT: "lowering",
+    START_BENT_HOLD: "holding",
+    START_BENT_READY: "resting",
+    PUSHING: "raising",
+    EXTENDED_HOLD: "holding",
+    RETURNING: "lowering",
     WAITING_FOR_START: "idle",
     STRAIGHTEN_TO_START: "lowering",
     EXTENDED_READY: "resting",
@@ -106,6 +188,14 @@ function repPhaseForAnalyzerPhase(phase) {
 
 function humanPhaseForAnalyzerPhase(phase) {
   return {
+    CALIBRATION_READY: "Begin now",
+    WAITING_FOR_TRACKING: "Start bent",
+    MOVE_TO_BENT: "Move to bent",
+    START_BENT_HOLD: "Hold bent",
+    START_BENT_READY: "Ready",
+    PUSHING: "Pressing",
+    EXTENDED_HOLD: "Hold reach",
+    RETURNING: "Returning",
     WAITING_FOR_START: "Start straight",
     STRAIGHTEN_TO_START: "Straighten",
     EXTENDED_READY: "Ready",
@@ -125,6 +215,23 @@ function compactPoint(point, score) {
     y: Number(point.y.toFixed(3)),
     score: Number(score.toFixed(3))
   };
+}
+
+function sensorStatusForSample(sensorStream, latestSensor, sensorExpectedActive, staleMs = 600) {
+  if (!sensorExpectedActive) return "offline";
+  if (latestSensor?.distance_cm != null && Date.now() - latestSensor.timestamp_ms <= staleMs) return "ok";
+  if (latestSensor?.distance_cm != null) return "warning";
+  if (sensorStream.status === "error") return "error";
+  if (sensorStream.status === "ok" || sensorStream.status === "connecting") return "warning";
+  return "offline";
+}
+
+function calibratedPositionForDistance(distanceCm, compressedCm, stretchedCm) {
+  if (!Number.isFinite(distanceCm) || !Number.isFinite(compressedCm) || !Number.isFinite(stretchedCm)) return null;
+  const travel = stretchedCm - compressedCm;
+  if (Math.abs(travel) < 0.01) return null;
+  const signedTravel = Math.sign(travel) * Math.max(Math.abs(travel), 0.25);
+  return clamp((distanceCm - compressedCm) / signedTravel, 0, 1);
 }
 
 function drawPoint(ctx, point, color, radius = 7) {
@@ -148,21 +255,33 @@ function drawLine(ctx, start, end, color, width = 5) {
   ctx.stroke();
 }
 
+// EMA alpha for angle smoothing in motion tracker. Matches the Python jitter.py value.
+const MOTION_EMA_ALPHA = 0.40;
+
 function updateMotion(samples, timestamp, elbowAngle) {
   if (elbowAngle == null) {
     samples.length = 0;
-    return { pace: "unknown", jitter: 0, velocity: 0 };
+    return { pace: "unknown", jitter: 0, velocity: 0, smoothedAngle: null };
   }
-  samples.push({ timestamp, elbowAngle });
-  while (samples.length > 18) samples.shift();
-  if (samples.length < 3) return { pace: "unknown", jitter: 0, velocity: 0 };
 
+  // Apply EMA to raw angle before storing — eliminates single-frame landmark bounce
+  const prev = samples.at(-1);
+  const emaAngle = prev == null
+    ? elbowAngle
+    : MOTION_EMA_ALPHA * elbowAngle + (1 - MOTION_EMA_ALPHA) * prev.emaAngle;
+
+  samples.push({ timestamp, elbowAngle, emaAngle });
+  // 26 samples ≈ 1.7 s at 15 Hz — matches Python tracker window
+  while (samples.length > 26) samples.shift();
+  if (samples.length < 3) return { pace: "unknown", jitter: 0, velocity: 0, smoothedAngle: emaAngle };
+
+  // Velocities computed on EMA-smoothed angles — not raw
   const velocities = [];
   for (let i = 1; i < samples.length; i += 1) {
     const previous = samples[i - 1];
     const current = samples[i];
     const dt = Math.max((current.timestamp - previous.timestamp) / 1000, 0.001);
-    velocities.push((current.elbowAngle - previous.elbowAngle) / dt);
+    velocities.push((current.emaAngle - previous.emaAngle) / dt);
   }
 
   const velocity = velocities.at(-1) ?? 0;
@@ -174,7 +293,7 @@ function updateMotion(samples, timestamp, elbowAngle) {
   const jitter = clamp(averageChange / 240, 0, 1);
   const speed = Math.abs(velocity);
   const pace = speed > 150 ? "too_fast" : speed < 8 ? "too_slow" : "good";
-  return { pace, jitter, velocity };
+  return { pace, jitter, velocity, smoothedAngle: emaAngle };
 }
 
 function activeSharedStream() {
@@ -218,6 +337,7 @@ export default function BrowserPoseOverlay({
   active,
   sessionId,
   onPacket,
+  onRoutineBegin,
   side = "right",
   exercise,
   recordingActive = true,
@@ -239,10 +359,19 @@ export default function BrowserPoseOverlay({
   const latestPoseRef = useRef(null);
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
-  const analyzerRef = useRef(createElbowFlexionAnalyzer(exercise));
+  const analyzerRef = useRef(createAnalyzerForExercise(exercise));
   const smootherRef = useRef(createPoseSignalSmoother());
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
+  const calibrationReadyUntilRef = useRef(0);
+  const [calibration, setCalibration] = useState({ compressedCm: null, stretchedCm: null });
+  const [routineStarted, setRoutineStarted] = useState(false);
+  const calibrationRef = useRef(calibration);
+  const routineStartedRef = useRef(routineStarted);
+  // Auto-calibration state
+  const [autoCalState, setAutoCalState] = useState("idle"); // idle | scanning | confirmed
+  const autoCalWindowRef = useRef([]); // rolling distance samples for range detection
+  const autoCalStableRef = useRef(0); // ms the range has been stable
   const [cameraState, setCameraState] = useState("idle");
   const [cameraError, setCameraError] = useState("");
   const [debugMode, setDebugMode] = useState(false);
@@ -250,6 +379,7 @@ export default function BrowserPoseOverlay({
   const recordingActiveRef = useRef(recordingActive);
   const overlayCoachMessageRef = useRef(overlayCoachMessage);
   const onPacketRef = useRef(onPacket);
+  const onRoutineBeginRef = useRef(onRoutineBegin);
   const exerciseRef = useRef(exercise);
   const sessionIdRef = useRef(sessionId);
   const activeSideRef = useRef(activeSide);
@@ -257,9 +387,106 @@ export default function BrowserPoseOverlay({
   useEffect(() => { recordingActiveRef.current = recordingActive; }, [recordingActive]);
   useEffect(() => { overlayCoachMessageRef.current = overlayCoachMessage; }, [overlayCoachMessage]);
   useEffect(() => { onPacketRef.current = onPacket; }, [onPacket]);
+  useEffect(() => { onRoutineBeginRef.current = onRoutineBegin; }, [onRoutineBegin]);
+  useEffect(() => { calibrationRef.current = calibration; }, [calibration]);
+  useEffect(() => { routineStartedRef.current = routineStarted; }, [routineStarted]);
   useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { activeSideRef.current = activeSide; }, [activeSide]);
+
+  const forwardPressExercise = isForwardPressExercise(exercise);
+  const calibrationComplete = !forwardPressExercise ||
+    (Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm));
+  const calibrationTravelCm = Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm)
+    ? Math.abs(calibration.stretchedCm - calibration.compressedCm)
+    : null;
+  const calibrationQuality = !forwardPressExercise || !calibrationComplete
+    ? "missing"
+    : calibrationTravelCm < 1
+      ? "low_travel"
+      : "ok";
+
+  const sensorStream = useSensorStream({
+    active: Boolean(active && forwardPressExercise)
+  });
+
+  useEffect(() => {
+    if (forwardPressExercise && calibrationComplete) {
+      calibrationReadyUntilRef.current = Date.now() + 1600;
+      routineStartedRef.current = true;
+      setRoutineStarted(true);
+      onRoutineBeginRef.current?.();
+    }
+    if (!calibrationComplete) {
+      calibrationReadyUntilRef.current = 0;
+      routineStartedRef.current = false;
+      setRoutineStarted(false);
+    }
+  }, [calibrationComplete, forwardPressExercise]);
+
+  // ── Auto-calibration scanning loop ────────────────────────────────────────
+  // While autoCalState === "scanning", poll sensor samples every 200 ms.
+  // Track rolling min/max over a ~6 s window; when the range has been stable
+  // (settled within ±0.4 cm) for 1.5 s AND travel > MIN_TRAVEL_CM, lock in.
+  useEffect(() => {
+    if (autoCalState !== "scanning" || !forwardPressExercise) return undefined;
+
+    const MIN_TRAVEL_CM = 3.0;  // minimum hand movement to accept calibration
+    const SCAN_WINDOW_MS = 6000;
+    const STABLE_NEEDED_MS = 1500;
+    const STABLE_TOLERANCE_CM = 0.4;
+
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      const rawSamples = sensorStream.samplesRef.current;
+      if (!rawSamples.length) return;
+
+      // Keep only samples from the last SCAN_WINDOW_MS
+      const cutoff = now - SCAN_WINDOW_MS;
+      const recent = rawSamples.filter((s) => s.timestamp_ms >= cutoff);
+      autoCalWindowRef.current = recent;
+
+      if (recent.length < 8) return; // not enough data yet
+
+      const distances = recent.map((s) => s.distance_cm).filter(Number.isFinite);
+      const minD = Math.min(...distances);
+      const maxD = Math.max(...distances);
+      const travel = maxD - minD;
+
+      if (travel < MIN_TRAVEL_CM) return; // user hasn't moved enough yet
+
+      // Check stability: split window in halves and compare max/min drift
+      const half = Math.floor(recent.length / 2);
+      const firstHalf = recent.slice(0, half).map((s) => s.distance_cm).filter(Number.isFinite);
+      const secondHalf = recent.slice(half).map((s) => s.distance_cm).filter(Number.isFinite);
+      const rangeFirst = Math.max(...firstHalf) - Math.min(...firstHalf);
+      const rangeSecond = Math.max(...secondHalf) - Math.min(...secondHalf);
+      const drift = Math.abs(rangeFirst - rangeSecond);
+
+      if (drift > STABLE_TOLERANCE_CM) {
+        // Range is still changing — reset stable timer
+        autoCalStableRef.current = now;
+        return;
+      }
+
+      if (autoCalStableRef.current === 0) {
+        autoCalStableRef.current = now;
+        return;
+      }
+
+      if (now - autoCalStableRef.current >= STABLE_NEEDED_MS) {
+        // Stable and sufficient travel — lock calibration
+        const compressedCm = Math.round(minD * 100) / 100;
+        const stretchedCm = Math.round(maxD * 100) / 100;
+        setCalibration({ compressedCm, stretchedCm });
+        calibrationRef.current = { compressedCm, stretchedCm };
+        setAutoCalState("confirmed");
+        autoCalStableRef.current = 0;
+      }
+    }, 200);
+
+    return () => window.clearInterval(interval);
+  }, [autoCalState, forwardPressExercise, sensorStream.samplesRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -277,9 +504,13 @@ export default function BrowserPoseOverlay({
     debugModeRef.current = debugMode;
   }, [debugMode]);
   useEffect(() => {
-    analyzerRef.current = createElbowFlexionAnalyzer(exercise);
+    analyzerRef.current = createAnalyzerForExercise(exercise);
     smootherRef.current.reset();
     previousSessionRef.current = sessionId;
+    calibrationRef.current = { compressedCm: null, stretchedCm: null };
+    routineStartedRef.current = false;
+    setCalibration({ compressedCm: null, stretchedCm: null });
+    setRoutineStarted(false);
   }, [exercise?.id]);
   useEffect(() => {
     if (previousSessionRef.current !== sessionId) {
@@ -289,6 +520,10 @@ export default function BrowserPoseOverlay({
         samplesRef.current = [];
       }
       previousSessionRef.current = sessionId;
+      calibrationRef.current = { compressedCm: null, stretchedCm: null };
+      routineStartedRef.current = false;
+      setCalibration({ compressedCm: null, stretchedCm: null });
+      setRoutineStarted(false);
     }
   }, [recordingActive, sessionId]);
   useEffect(() => {
@@ -412,10 +647,34 @@ export default function BrowserPoseOverlay({
     setCameraState((state) => state === "idle" ? "idle" : "stopped");
   }
 
+  function captureCalibrationPoint(kind) {
+    const latestSensor = sensorStream.latestSampleRef.current;
+    if (!Number.isFinite(latestSensor?.distance_cm)) return;
+    setCalibration((current) => {
+      const next = {
+        ...current,
+        [kind]: latestSensor.distance_cm
+      };
+      calibrationRef.current = next;
+      return next;
+    });
+    analyzerRef.current?.reset?.();
+    routineStartedRef.current = false;
+    setRoutineStarted(false);
+  }
+
+  function beginRoutine() {
+    analyzerRef.current?.reset?.();
+    samplesRef.current = [];
+    calibrationReadyUntilRef.current = Date.now() + 1200;
+    routineStartedRef.current = true;
+    setRoutineStarted(true);
+    onRoutineBeginRef.current?.();
+  }
+
   function buildPacket(poseLandmarks, handLandmarks, timestampMs) {
     const exercise = exerciseRef.current;
     const activeSide = activeSideRef.current;
-    const recordingActive = recordingActiveRef.current;
     const sessionId = sessionIdRef.current;
     const targetAngle = exerciseTargetAngle(exercise);
     const indices = POSE[activeSide];
@@ -452,7 +711,35 @@ export default function BrowserPoseOverlay({
     const cameraStatus = validAnalysis ? "ok" : "warning";
     const compensation = validAnalysis ? "none" : "low_confidence";
 
-    const smootherEnabled = SMOOTHED_EXERCISE_IDS.has(exercise?.id || "elbow_flexion_extension");
+    const isForwardPress = isForwardPressExercise(exercise);
+    const latestSensor = sensorStream.latestSampleRef.current;
+    const currentCalibration = calibrationRef.current;
+    const packetCalibrationComplete = !isForwardPress ||
+      (Number.isFinite(currentCalibration.compressedCm) && Number.isFinite(currentCalibration.stretchedCm));
+    const packetCalibrationTravelCm = Number.isFinite(currentCalibration.compressedCm) && Number.isFinite(currentCalibration.stretchedCm)
+      ? Math.abs(currentCalibration.stretchedCm - currentCalibration.compressedCm)
+      : null;
+    const packetCalibrationQuality = !isForwardPress || !packetCalibrationComplete
+      ? "missing"
+      : packetCalibrationTravelCm < 1
+        ? "low_travel"
+        : "ok";
+    const sensorStatus = isForwardPress
+      ? sensorStatusForSample(sensorStream, latestSensor, true, exercise?.sensorStaleMs ?? 600)
+      : "offline";
+    const sensorJitterScore = latestSensor?.sensor_jitter_score ?? 0;
+    const calibratedPosition = isForwardPress && packetCalibrationComplete
+      ? calibratedPositionForDistance(latestSensor?.distance_cm, currentCalibration.compressedCm, currentCalibration.stretchedCm)
+      : null;
+    const framingResult = isForwardPress && validAnalysis
+      ? analyzePressFaming(
+          shoulderSample.point,
+          elbowSample.point,
+          wristSample.point,
+        )
+      : null;
+
+    const smootherEnabled = !isForwardPress && SMOOTHED_EXERCISE_IDS.has(exercise?.id || "elbow_flexion_extension");
     const smoothedFrame = smootherEnabled
       ? smootherRef.current.update({
         timestampMs,
@@ -464,35 +751,107 @@ export default function BrowserPoseOverlay({
         wrist
       })
       : null;
-    const analyzerElbowAngle = smootherEnabled ? smoothedFrame.smoothed.elbowAngle : elbowAngle;
-    const analyzerShoulderAngle = smootherEnabled ? smoothedFrame.smoothed.shoulderAngle : upperArmAngle;
-    const analyzerValid = smootherEnabled ? smoothedFrame.validity.valid : validAnalysis;
 
-    const motion = updateMotion(samplesRef.current, timestampMs, analyzerValid ? analyzerElbowAngle : null);
-    const combinedJitter = analyzerValid
-      ? smootherEnabled
-        ? smoothedFrame.jitter.cameraJitterScore
-        : motion.jitter / 2
-      : 0;
-    const currentRange = analyzerValid && exercise?.targetPosition
-      ? analyzerElbowAngle <= exercise.targetPosition.elbowAngleMax && analyzerElbowAngle >= exercise.targetPosition.elbowAngleMin
-        ? "target_met"
-        : analyzerElbowAngle > exercise.targetPosition.elbowAngleMax
-          ? "almost_there"
-          : "overextended"
-      : "unknown";
-    // Raw MediaPipe angles are smoothed before analyzer state transitions.
-    const analyzerFrame = {
-      timestampMs: Math.round(timestampMs),
-      elbowAngle: analyzerValid ? analyzerElbowAngle : null,
-      shoulderAngle: analyzerValid ? analyzerShoulderAngle : null,
-      landmarkConfidence: confidence,
-      jitterScore: combinedJitter,
-      validLandmarks: analyzerValid
-    };
-    const analyzerOutput = recordingActive
+    let motion;
+    let analyzerElbowAngle;
+    let analyzerShoulderAngle;
+    let analyzerValid;
+    let combinedJitter;
+    let currentRange;
+
+    if (isForwardPress) {
+      motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
+      analyzerElbowAngle = (validAnalysis && motion.smoothedAngle != null)
+        ? motion.smoothedAngle
+        : elbowAngle;
+      analyzerShoulderAngle = upperArmAngle;
+      analyzerValid = validAnalysis;
+      combinedJitter = validAnalysis
+        ? Math.max(motion.jitter / 2, packetCalibrationComplete ? 0 : sensorJitterScore)
+        : 0;
+      currentRange = validAnalysis && exercise?.targetPosition
+        ? elbowAngle <= exercise.targetPosition.elbowAngleMax && elbowAngle >= exercise.targetPosition.elbowAngleMin
+          ? "target_met"
+          : elbowAngle < exercise.targetPosition.elbowAngleMin
+            ? "almost_there"
+            : "overextended"
+        : "unknown";
+    } else if (smootherEnabled) {
+      analyzerElbowAngle = smoothedFrame.smoothed.elbowAngle;
+      analyzerShoulderAngle = smoothedFrame.smoothed.shoulderAngle;
+      analyzerValid = smoothedFrame.validity.valid;
+      motion = updateMotion(samplesRef.current, timestampMs, analyzerValid ? analyzerElbowAngle : null);
+      combinedJitter = analyzerValid ? smoothedFrame.jitter.cameraJitterScore : 0;
+      currentRange = analyzerValid && exercise?.targetPosition
+        ? analyzerElbowAngle <= exercise.targetPosition.elbowAngleMax && analyzerElbowAngle >= exercise.targetPosition.elbowAngleMin
+          ? "target_met"
+          : analyzerElbowAngle > exercise.targetPosition.elbowAngleMax
+            ? "almost_there"
+            : "overextended"
+        : "unknown";
+    } else {
+      motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
+      analyzerElbowAngle = elbowAngle;
+      analyzerShoulderAngle = upperArmAngle;
+      analyzerValid = validAnalysis;
+      combinedJitter = validAnalysis ? motion.jitter / 2 : 0;
+      currentRange = validAnalysis && exercise?.targetPosition
+        ? analyzerElbowAngle <= exercise.targetPosition.elbowAngleMax && analyzerElbowAngle >= exercise.targetPosition.elbowAngleMin
+          ? "target_met"
+          : analyzerElbowAngle > exercise.targetPosition.elbowAngleMax
+            ? "almost_there"
+            : "overextended"
+        : "unknown";
+    }
+
+    const analyzerFrame = isForwardPress
+      ? {
+        timestampMs: Math.round(Date.now()),
+        elbowAngle: validAnalysis ? analyzerElbowAngle : null,
+        shoulderAngle: validAnalysis ? analyzerShoulderAngle : null,
+        landmarkConfidence: confidence,
+        jitterScore: combinedJitter,
+        cameraJitterScore: motion.jitter,
+        distanceCm: latestSensor?.distance_cm ?? null,
+        sensorTimestampMs: latestSensor?.timestamp_ms ?? null,
+        sensorJitterScore: packetCalibrationComplete ? 0 : sensorJitterScore,
+        calibrationCompressedCm: currentCalibration.compressedCm,
+        calibrationStretchedCm: currentCalibration.stretchedCm,
+        sensorValid: sensorStatus === "ok",
+        validLandmarks: validAnalysis
+      }
+      : {
+        timestampMs: Math.round(timestampMs),
+        elbowAngle: analyzerValid ? analyzerElbowAngle : null,
+        shoulderAngle: analyzerValid ? analyzerShoulderAngle : null,
+        landmarkConfidence: confidence,
+        jitterScore: combinedJitter,
+        validLandmarks: analyzerValid
+      };
+    const analysisActive = !isForwardPress || (packetCalibrationComplete && routineStartedRef.current);
+    const analyzerOutput = analysisActive
       ? analyzerRef.current.analyze(analyzerFrame)
       : analyzerRef.current.preview(analyzerFrame);
+    // Framing cues override coach message when arm is not well-positioned in frame.
+    // Only override during waiting/pre-rep phases so it doesn't interrupt mid-rep.
+    const preRepPhases = new Set(["WAITING_FOR_TRACKING", "MOVE_TO_BENT", "START_BENT_HOLD", "START_BENT_READY"]);
+    if (framingResult && !framingResult.ok && preRepPhases.has(analyzerOutput.phase)) {
+      analyzerOutput.coach_state = framingResult.state;
+      analyzerOutput.local_coach_message = framingResult.cue;
+    }
+
+    if (isForwardPress && !packetCalibrationComplete) {
+      analyzerOutput.coach_state = sensorStatus === "ok" ? "almost_there" : "low_confidence";
+      analyzerOutput.local_coach_message = "Calibrate the bent and stretched distances before pressing.";
+    }
+    if (isForwardPress && packetCalibrationComplete && Date.now() < calibrationReadyUntilRef.current) {
+      analyzerOutput.phase = "CALIBRATION_READY";
+      analyzerOutput.coach_state = "good_form";
+      analyzerOutput.local_coach_message = "Calibration set. Begin now.";
+    }
+    const packetSensorJitter = isForwardPress && packetCalibrationComplete
+      ? analyzerOutput.sensor_linearity_score ?? sensorJitterScore
+      : sensorJitterScore;
     const state = analyzerOutput.coach_state;
 
     return {
@@ -501,30 +860,50 @@ export default function BrowserPoseOverlay({
       timestamp_ms: Math.round(Date.now()),
       exercise: exercise?.id || "elbow_flexion_extension",
       side: activeSide,
-      device_id: "browser-webcam",
-      sensor_status: "offline",
-      camera_status: analyzerValid ? cameraStatus : "warning",
-      distance_cm: null,
-      sensor_jitter_score: 0,
-      opencv_jitter_score: Number((smootherEnabled ? smoothedFrame.jitter.cameraJitterScore : motion.jitter).toFixed(3)),
-      combined_jitter_score: Number(combinedJitter.toFixed(3)),
-      jitter_detected: analyzerValid && (combinedJitter > 0.45 || (smoothedFrame?.jitter?.peakJitterScore ?? 0) > 0.7),
-      shoulder_angle: analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null,
-      elbow_angle: analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null,
-      raw_shoulder_angle: validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
-      raw_elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
-      smoothed_shoulder_angle: analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null,
-      smoothed_elbow_angle: analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null,
-      smoothing_jitter_score: smootherEnabled ? smoothedFrame.jitter.cameraJitterScore : null,
-      angle_residual: smootherEnabled ? smoothedFrame.jitter.angleResidual : null,
-      velocity_residual_deg_per_sec: smootherEnabled ? smoothedFrame.jitter.velocityResidualDegPerSec : null,
-      trend_direction: smootherEnabled ? smoothedFrame.trend.elbowDirection : null,
-      trend_velocity_deg_per_sec: smootherEnabled ? smoothedFrame.trend.elbowVelocityDegPerSec : null,
-      validity_status: smootherEnabled ? smoothedFrame.validity.confidenceLabel : (validAnalysis ? "good" : "invalid"),
-      raw_validity_status: smootherEnabled ? smoothedFrame.validity.reason : angleRejectionReason,
-      stable_tracking: smootherEnabled ? smoothedFrame.stableFlags.isTrackingStable : validAnalysis,
-      stable_straight: smootherEnabled ? smoothedFrame.stableFlags.isStraightStable : false,
-      stable_flexed: smootherEnabled ? smoothedFrame.stableFlags.isFlexedStable : false,
+      device_id: isForwardPress ? (latestSensor?.device_id || "browser-webcam") : "browser-webcam",
+      sensor_status: sensorStatus,
+      camera_status: isForwardPress ? cameraStatus : (analyzerValid ? cameraStatus : "warning"),
+      distance_cm: isForwardPress ? (latestSensor?.distance_cm ?? null) : null,
+      sensor_jitter_score: Number(packetSensorJitter.toFixed(3)),
+      opencv_jitter_score: Number((smootherEnabled && smoothedFrame ? smoothedFrame.jitter.cameraJitterScore : motion.jitter).toFixed(3)),
+      combined_jitter_score: Number(
+        (isForwardPress
+          ? Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0)
+          : combinedJitter
+        ).toFixed(3)
+      ),
+      jitter_detected: isForwardPress
+        ? validAnalysis && Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0) > 0.65
+        : analyzerValid && (combinedJitter > 0.45 || (smoothedFrame?.jitter?.peakJitterScore ?? 0) > 0.7),
+      shoulder_angle: isForwardPress
+        ? (validAnalysis ? Number(upperArmAngle.toFixed(1)) : null)
+        : (analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null),
+      elbow_angle: isForwardPress
+        ? (validAnalysis ? Number(elbowAngle.toFixed(1)) : null)
+        : (analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null),
+      elbow_angle_smoothed: isForwardPress && validAnalysis && motion.smoothedAngle != null
+        ? Number(motion.smoothedAngle.toFixed(1))
+        : null,
+      raw_shoulder_angle: !isForwardPress && validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
+      raw_elbow_angle: !isForwardPress && validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
+      smoothed_shoulder_angle: !isForwardPress && analyzerValid && analyzerShoulderAngle != null
+        ? Number(analyzerShoulderAngle.toFixed(1))
+        : null,
+      smoothed_elbow_angle: !isForwardPress && analyzerValid && analyzerElbowAngle != null
+        ? Number(analyzerElbowAngle.toFixed(1))
+        : null,
+      smoothing_jitter_score: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.cameraJitterScore : null,
+      angle_residual: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.angleResidual : null,
+      velocity_residual_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.jitter.velocityResidualDegPerSec : null,
+      trend_direction: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowDirection : null,
+      trend_velocity_deg_per_sec: smootherEnabled && smoothedFrame ? smoothedFrame.trend.elbowVelocityDegPerSec : null,
+      validity_status: isForwardPress
+        ? (validAnalysis ? "good" : "invalid")
+        : (smootherEnabled && smoothedFrame ? smoothedFrame.validity.confidenceLabel : (validAnalysis ? "good" : "invalid")),
+      raw_validity_status: smootherEnabled && smoothedFrame ? smoothedFrame.validity.reason : angleRejectionReason,
+      stable_tracking: smootherEnabled && smoothedFrame ? smoothedFrame.stableFlags.isTrackingStable : validAnalysis,
+      stable_straight: smootherEnabled && smoothedFrame ? smoothedFrame.stableFlags.isStraightStable : false,
+      stable_flexed: smootherEnabled && smoothedFrame ? smoothedFrame.stableFlags.isFlexedStable : false,
       target_angle: targetAngle,
       landmark_confidence: Number(confidence.toFixed(3)),
       rep_count: analyzerOutput.rep_count,
@@ -555,8 +934,21 @@ export default function BrowserPoseOverlay({
       smoothed_frame: smoothedFrame,
       analyzer_phase_label: humanPhaseForAnalyzerPhase(analyzerOutput.phase),
       range_of_motion: analyzerOutput.range_of_motion,
+      push_depth_cm: analyzerOutput.push_depth_cm,
+      sensor_linearity_score: analyzerOutput.sensor_linearity_score,
+      sensor_valid: analyzerOutput.sensor_valid,
+      calibration_complete: packetCalibrationComplete,
+      calibration_quality: packetCalibrationQuality,
+      calibration_travel_cm: packetCalibrationTravelCm == null ? null : Number(packetCalibrationTravelCm.toFixed(2)),
+      calibration_compressed_cm: currentCalibration.compressedCm,
+      calibration_stretched_cm: currentCalibration.stretchedCm,
+      calibrated_position: calibratedPosition == null ? null : Number(calibratedPosition.toFixed(3)),
+      sensor_command_status: sensorStream.commandStatus,
+      sensor_stream_url: sensorStream.url,
       shoulder_drift: analyzerOutput.shoulder_drift,
       completed_rep: analyzerOutput.completed_rep,
+      framing_cue: framingResult?.cue ?? null,
+      framing_ok: framingResult?.ok ?? true,
       _debug_landmarks: {
         shoulder: compactPoint(shoulder, shoulderSample.score),
         elbow: compactPoint(elbow, elbowSample.score),
@@ -610,7 +1002,19 @@ export default function BrowserPoseOverlay({
       }
       if (shoulder) drawPoint(ctx, shoulder, "#f4b95f");
       if (elbow) drawPoint(ctx, elbow, "#56d8a7");
-      if (wrist) drawPoint(ctx, wrist, "#ff7464");
+      // Wrist: larger ring for chest press so the push endpoint is clearly visible
+      if (wrist) {
+        const isPressMode = isForwardPressExercise(exerciseRef.current);
+        if (isPressMode) {
+          // Double-ring wrist marker for chest press
+          ctx.beginPath();
+          ctx.strokeStyle = "#ff7464";
+          ctx.lineWidth = 2;
+          ctx.arc(wrist.x, wrist.y, 16, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        drawPoint(ctx, wrist, "#ff7464", isPressMode ? 9 : 7);
+      }
 
       if (packet.angle_valid && shoulder) {
         ctx.beginPath();
@@ -618,6 +1022,56 @@ export default function BrowserPoseOverlay({
         ctx.lineWidth = 5;
         ctx.arc(shoulder.x, shoulder.y, 82, -Math.PI / 2 - 0.15, -Math.PI / 2 + 0.15);
         ctx.stroke();
+      }
+
+      // Palm centre from hand landmarks — chest press specific
+      if (isForwardPressExercise(exerciseRef.current) && handLandmarks?.length) {
+        const palmPx = palmCenterFromHandLandmarks(handLandmarks[0], width, height);
+        if (palmPx) {
+          // Outer ring
+          ctx.beginPath();
+          ctx.strokeStyle = "#56d8a7";
+          ctx.lineWidth = 2;
+          ctx.arc(palmPx.x, palmPx.y, 18, 0, Math.PI * 2);
+          ctx.stroke();
+          // Filled centre
+          ctx.beginPath();
+          ctx.fillStyle = "#56d8a7";
+          ctx.arc(palmPx.x, palmPx.y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          // Label
+          ctx.fillStyle = "#56d8a7";
+          ctx.font = "600 13px Segoe UI";
+          ctx.fillText("PALM", palmPx.x + 22, palmPx.y + 5);
+          // Line from wrist to palm centre
+          if (wrist) {
+            ctx.beginPath();
+            ctx.strokeStyle = "rgba(86,216,167,.45)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.moveTo(wrist.x, wrist.y);
+            ctx.lineTo(palmPx.x, palmPx.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+      }
+    }
+
+    // Framing guide border + cue for chest press
+    if (isForwardPressExercise(exerciseRef.current) && packet.angle_valid) {
+      const framingOk = packet.framing_ok !== false;
+      const borderColor = framingOk ? "rgba(86,216,167,.5)" : "rgba(95,185,244,.85)";
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(6, 6, width - 12, height - 12);
+
+      if (!framingOk && packet.framing_cue) {
+        ctx.fillStyle = "rgba(15,17,16,.82)";
+        ctx.fillRect(0, height - 62, width, 62);
+        ctx.fillStyle = "#5fb9f4";
+        ctx.font = "700 17px Segoe UI";
+        ctx.fillText(packet.framing_cue, 22, height - 30);
       }
     }
 
@@ -650,7 +1104,7 @@ export default function BrowserPoseOverlay({
         coach_state: packet.coach_state
       });
     }
-    if (recordingActive) {
+    if (recordingActiveRef.current && packet.calibration_complete !== false) {
       try {
         await postPacket(packet);
       } catch {
@@ -730,6 +1184,138 @@ export default function BrowserPoseOverlay({
           </button>
           <button type="button" className="camera-stop" onClick={stopCamera}>Stop camera</button>
         </div>
+      )}
+      {forwardPressExercise && cameraState === "ready" && (
+        <AutoCalibrationPanel
+          sensorStream={sensorStream}
+          autoCalState={autoCalState}
+          calibration={calibration}
+          calibrationComplete={calibrationComplete}
+          calibrationQuality={calibrationQuality}
+          onStartScan={() => {
+            autoCalStableRef.current = 0;
+            autoCalWindowRef.current = [];
+            setAutoCalState("scanning");
+            setCalibration({ compressedCm: null, stretchedCm: null });
+            calibrationRef.current = { compressedCm: null, stretchedCm: null };
+            analyzerRef.current?.reset?.();
+            routineStartedRef.current = false;
+            setRoutineStarted(false);
+          }}
+          onReset={() => {
+            setAutoCalState("idle");
+            autoCalStableRef.current = 0;
+            autoCalWindowRef.current = [];
+            setCalibration({ compressedCm: null, stretchedCm: null });
+            calibrationRef.current = { compressedCm: null, stretchedCm: null };
+            analyzerRef.current?.reset?.();
+            routineStartedRef.current = false;
+            setRoutineStarted(false);
+          }}
+          onBegin={beginRoutine}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatDistance(value) {
+  return Number.isFinite(value) ? `${value.toFixed(2)} cm` : "--";
+}
+
+/**
+ * AutoCalibrationPanel
+ *
+ * Replaces the old "Set Bent / Set Stretched" button pair.
+ *
+ * Flow:
+ *   idle      → user taps "Start calibration"
+ *   scanning  → user moves hand in/out; system tracks min/max distance
+ *   confirmed → range locked; user taps "Begin" to start reps
+ */
+function AutoCalibrationPanel({
+  sensorStream,
+  autoCalState,
+  calibration,
+  calibrationComplete,
+  calibrationQuality,
+  onStartScan,
+  onReset,
+  onBegin,
+}) {
+  const hasSensor = Number.isFinite(sensorStream.latest?.distance_cm);
+  const liveDist = hasSensor ? sensorStream.latest.distance_cm.toFixed(2) : null;
+  const travel = Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm)
+    ? Math.abs(calibration.stretchedCm - calibration.compressedCm)
+    : 0;
+  // Progress bar: travel relative to 5 cm target
+  const progress = Math.min(travel / 5, 1);
+
+  return (
+    <div className="sensor-calibration-panel">
+      <div className="calibration-current">
+        <p className="eyebrow">Sensor calibration</p>
+        <strong className="live-distance-value">
+          {liveDist != null ? `${liveDist} cm` : "Waiting for sensor"}
+        </strong>
+      </div>
+
+      {autoCalState === "idle" && (
+        <>
+          <button
+            type="button"
+            className="calibration-begin"
+            onClick={onStartScan}
+            disabled={!hasSensor}
+          >
+            Start calibration
+          </button>
+          <small>Press the button then slowly move your hand forward and back a few times.</small>
+        </>
+      )}
+
+      {autoCalState === "scanning" && (
+        <>
+          <p className="calibration-scanning-hint">
+            Move your hand <strong>in and out</strong> slowly — full bent to full press.
+          </p>
+          <div className="cal-progress-bar-track">
+            <div
+              className="cal-progress-bar-fill"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
+          <div className="calibration-values">
+            <span><em>Near</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
+            <span><em>Far</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
+            <span><em>Range</em> <strong>{travel > 0 ? `${travel.toFixed(1)} cm` : "--"}</strong></span>
+          </div>
+          <small>Keep moving until the bar fills — system will lock automatically.</small>
+          <button type="button" className="calibration-reset-btn" onClick={onReset}>Cancel</button>
+        </>
+      )}
+
+      {autoCalState === "confirmed" && (
+        <>
+          <div className="calibration-values calibration-locked">
+            <span>✓ <em>Bent</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
+            <span>✓ <em>Extended</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
+            <span><em>Range</em> <strong>{travel.toFixed(1)} cm</strong></span>
+          </div>
+          <small className="calibration-ready">
+            {calibrationQuality === "low_travel"
+              ? "Calibrated — try a wider range for better scoring."
+              : "Calibrated and ready."}
+          </small>
+          <div className="calibration-actions">
+            <button type="button" className="calibration-begin" onClick={onBegin}>
+              Begin
+            </button>
+            <button type="button" className="calibration-reset-btn" onClick={onReset}>
+              Redo
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
