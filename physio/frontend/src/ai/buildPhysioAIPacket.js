@@ -11,6 +11,11 @@ const PHASE_INSTRUCTIONS = {
   FLEXING: "User is curling; encourage a controlled bend.",
   FLEXED_HOLD: "User should hold the bent position briefly.",
   EXTENDING: "User is straightening; encourage a calm extension.",
+  WAITING_FOR_TRACKING: "Guide the user to start with the elbow bent.",
+  START_BENT_READY: "User is ready to press; cue a slow forward push.",
+  PUSHING: "User is pressing forward; cue steady linear motion.",
+  EXTENDED_HOLD: "User should hold the forward reach briefly.",
+  RETURNING: "User is returning; encourage a controlled bend.",
   REP_COMPLETE: "Celebrate the completed rep briefly.",
   SESSION_COMPLETE: "Session is done; give a calm closing line."
 };
@@ -33,6 +38,9 @@ export function buildPhysioAIPacket({ exercise, analyzerOutput, packet, summary,
       ? `${exercise.targetPosition.elbowAngleMin}-${exercise.targetPosition.elbowAngleMax} degrees`
       : `${output.target_elbow_min ?? 55}-${output.target_elbow_max ?? 100} degrees`,
     hold_time_sec: round(output.hold_time_sec ?? packet?.hold_time_sec),
+    push_depth_cm: round(output.push_depth_cm ?? packet?.push_depth_cm),
+    sensor_linearity_score: round(output.sensor_linearity_score ?? packet?.sensor_linearity_score, 2),
+    distance_cm: round(packet?.distance_cm),
     pace: output.pace || packet?.pace || "unknown",
     jitter_score: round(output.jitter_score ?? packet?.combined_jitter_score, 2),
     shoulder_drift: round(output.shoulder_drift ?? packet?.shoulder_drift),

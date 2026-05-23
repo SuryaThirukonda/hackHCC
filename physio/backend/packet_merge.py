@@ -6,6 +6,7 @@ from schemas import PhysioPacket, PosePacket, SensorPacket
 
 REQUIRED_HOLD_TIME_SEC = 2.0
 TARGET_REPS = 8
+LOCAL_ANALYZED_EXERCISES = {"elbow_flexion_extension", "seated_one_arm_forward_press"}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -13,7 +14,7 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def calculate_physio_score(packet: PhysioPacket) -> int | None:
-    if packet.exercise == "elbow_flexion_extension" and packet.physio_score is not None:
+    if packet.exercise in LOCAL_ANALYZED_EXERCISES and packet.physio_score is not None:
         return packet.physio_score
     if packet.shoulder_angle is None or packet.elbow_angle is None or packet.camera_status != "ok":
         return None
@@ -38,7 +39,7 @@ def calculate_physio_score(packet: PhysioPacket) -> int | None:
 
 
 def choose_coach_state(packet: PhysioPacket) -> str:
-    if packet.exercise == "elbow_flexion_extension":
+    if packet.exercise in LOCAL_ANALYZED_EXERCISES:
         if (
             packet.camera_status != "ok"
             or packet.elbow_angle is None
@@ -70,7 +71,7 @@ def choose_coach_state(packet: PhysioPacket) -> str:
 
 
 def apply_local_rules(packet: PhysioPacket) -> PhysioPacket:
-    combined = (packet.sensor_jitter_score + packet.opencv_jitter_score) / 2
+    combined = max(packet.combined_jitter_score, (packet.sensor_jitter_score + packet.opencv_jitter_score) / 2)
     update = {
         "combined_jitter_score": round(combined, 3),
         "jitter_detected": combined > 0.65,

@@ -113,6 +113,7 @@ function average(values) {
 function issueLabel(issue) {
   return {
     did_not_bend_enough: "did not bend enough",
+    short_push_depth: "short push depth",
     did_not_hold_long_enough: "short hold time",
     moved_too_fast: "moving too fast",
     too_jittery: "motion not steady",
@@ -125,6 +126,7 @@ function issueLabel(issue) {
 function recommendationForIssue(issue) {
   return {
     did_not_bend_enough: "Focus on bending deeper into the target zone.",
+    short_push_depth: "Press a little farther while keeping the motion smooth.",
     did_not_hold_long_enough: "Pause briefly at the bent position before extending.",
     moved_too_fast: "Slow down each rep and control the return.",
     too_jittery: "Use a steadier pace and avoid sudden changes.",
@@ -140,6 +142,10 @@ export function summarizeRunnerSession(state, { sessionId, exercise, painLevel =
   const uniqueReps = Array.from(new Map(completedReps.map((rep) => [rep.rep_index, rep])).values());
   const validPackets = packets.filter((packet) => packet?.angle_valid !== false);
   const rangeValues = uniqueReps.map((rep) => rep.range_of_motion).filter((value) => Number.isFinite(value));
+  const pushDepthValues = uniqueReps.map((rep) => rep.push_depth_cm).filter((value) => Number.isFinite(value));
+  const linearityValues = uniqueReps.map((rep) => rep.sensor_linearity_score).filter((value) => Number.isFinite(value));
+  const extensionAngleValues = uniqueReps.map((rep) => rep.max_extension_angle).filter((value) => Number.isFinite(value));
+  const shoulderDriftValues = uniqueReps.map((rep) => rep.shoulder_drift).filter((value) => Number.isFinite(value));
   const holdValues = uniqueReps.map((rep) => rep.hold_time_sec).filter((value) => Number.isFinite(value));
   const durationValues = uniqueReps.map((rep) => rep.rep_duration_sec).filter((value) => Number.isFinite(value));
   const scoreValues = [
@@ -152,6 +158,7 @@ export function summarizeRunnerSession(state, { sessionId, exercise, painLevel =
 
   const issueCounts = {
     did_not_bend_enough: uniqueReps.filter((rep) => rep.issue === "did_not_bend_enough").length,
+    short_push_depth: uniqueReps.filter((rep) => rep.issue === "short_push_depth").length,
     did_not_hold_long_enough: uniqueReps.filter((rep) => (rep.hold_time_sec ?? 0) < (exercise?.holdSeconds ?? 1)).length,
     moved_too_fast: uniqueReps.filter((rep) => rep.pace === "too_fast").length,
     too_jittery: uniqueReps.filter((rep) => (rep.jitter_score ?? 0) > (exercise?.jitterThreshold ?? 0.35)).length,
@@ -167,6 +174,9 @@ export function summarizeRunnerSession(state, { sessionId, exercise, painLevel =
     ...packets.map((packet) => packet?.rep_count || 0),
     0
   );
+  const isForwardPress = exercise?.movementType === "forward_press" || state.exercise?.movementType === "forward_press";
+  const bestRange = Math.max(...rangeValues, 0);
+  const bestPushDepth = Math.max(...pushDepthValues, 0);
 
   return {
     session_id: sessionId || state.sessionId || "local-webcam-session",
@@ -179,10 +189,15 @@ export function summarizeRunnerSession(state, { sessionId, exercise, painLevel =
     total_reps: totalReps,
     clean_reps: uniqueReps.filter((rep) => rep.clean).length,
     rep_goal: exercise?.repGoal || state.exercise?.repGoal || 8,
-    best_angle: Number((Math.max(...rangeValues, 0)).toFixed(1)),
+    best_angle: Number(bestRange.toFixed(1)),
     average_angle: Number(average(rangeValues).toFixed(1)),
-    best_range_of_motion: Number((Math.max(...rangeValues, 0)).toFixed(1)),
+    best_range_of_motion: Number(bestRange.toFixed(1)),
     average_range_of_motion: Number(average(rangeValues).toFixed(1)),
+    best_push_depth_cm: Number(bestPushDepth.toFixed(1)),
+    average_push_depth_cm: Number(average(pushDepthValues).toFixed(1)),
+    average_extension_angle: Number(average(extensionAngleValues).toFixed(1)),
+    average_shoulder_drift: Number(average(shoulderDriftValues).toFixed(1)),
+    average_sensor_linearity_score: Number(average(linearityValues).toFixed(2)),
     average_hold_time_sec: Number(average(holdValues).toFixed(1)),
     average_rep_duration_sec: Number(average(durationValues).toFixed(1)),
     average_physio_score: Math.round(average(scoreValues)),
@@ -192,7 +207,9 @@ export function summarizeRunnerSession(state, { sessionId, exercise, painLevel =
     fatigue_level: fatigueLevel,
     common_issue: commonIssueKey,
     shoulder_compensation_count: issueCounts.shoulder_compensation,
-    summary_text: `User completed ${totalReps} ${totalReps === 1 ? "rep" : "reps"} with a best range of motion of ${Math.max(...rangeValues, 0).toFixed(1)} degrees.`,
+    summary_text: isForwardPress
+      ? `User completed ${totalReps} ${totalReps === 1 ? "press" : "presses"} with a best push depth of ${bestPushDepth.toFixed(1)} cm.`
+      : `User completed ${totalReps} ${totalReps === 1 ? "rep" : "reps"} with a best range of motion of ${bestRange.toFixed(1)} degrees.`,
     recommendation_text: recommendationForIssue(commonIssueKey),
     issue_label: issueLabel(commonIssueKey),
     completed_reps: uniqueReps

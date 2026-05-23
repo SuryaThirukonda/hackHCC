@@ -87,17 +87,38 @@ movement tracking.
 
 The backend mock packets do not require this server, but Person A can use it as
 the sensor contract reference. Python OpenCV packets display sensor data as real
-only when `distance_cm` is present and `sensor_status` is `ok`.
+only when `distance_cm` is present and `sensor_status` is `ok`. The forward
+press exercise uses the websocket command channel at `ws://localhost:8765` by
+default. Set `VITE_SENSOR_WS_URL=ws://<pi-host>:8765` for the Pi.
 
 ```powershell
 cd physio\hardware
 python fake_sensor_server.py
 ```
 
+The websocket mode requires the `websockets` package, which is included when
+the backend requirements are installed.
+
 Test:
 
 ```powershell
 curl http://localhost:8010/sensor/latest
+```
+
+Websocket command format:
+
+```json
+{"command": "start"}
+```
+
+```json
+{"command": "stop"}
+```
+
+Distance messages can be plain text:
+
+```text
+Distance: 113.05 cm
 ```
 
 ## Python Tracker Options
