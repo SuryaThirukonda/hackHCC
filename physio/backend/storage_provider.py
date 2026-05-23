@@ -5,7 +5,7 @@ from typing import Protocol
 
 from schemas import PhysioPacket, SessionSummary
 from session_store import LocalSessionStore
-from sqLite_store import SQLiteSessionStore
+from sqlite_store import SQLiteSessionStore
 
 
 class SessionStore(Protocol):
