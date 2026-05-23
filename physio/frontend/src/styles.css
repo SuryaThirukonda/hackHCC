@@ -750,6 +750,68 @@ button:disabled {
   gap: 16px;
 }
 
+.bonus-rep-banner {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.12), rgba(34, 197, 94, 0.08));
+  border: 1.5px solid rgba(74, 222, 128, 0.4);
+  border-radius: 14px;
+  padding: 18px 22px;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.bonus-rep-content strong {
+  font-size: 1rem;
+  color: var(--text-primary, #e2e8f0);
+}
+
+.bonus-rep-content p {
+  margin: 4px 0 12px;
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.875rem;
+}
+
+.bonus-rep-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bonus-rep-yes {
+  background: rgba(74, 222, 128, 0.18);
+  border: 1.5px solid rgba(74, 222, 128, 0.5);
+  color: #4ade80;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.bonus-rep-yes:hover {
+  background: rgba(74, 222, 128, 0.28);
+}
+
+.bonus-rep-end {
+  background: transparent;
+  border: 1.5px solid rgba(148, 163, 184, 0.3);
+  color: var(--text-muted, #94a3b8);
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.bonus-rep-end:hover {
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
 .live-session-main {
   min-width: 0;
 }
@@ -1330,12 +1392,12 @@ button:disabled {
 
 .metric-card {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--panel-2);
   display: flex;
-  gap: 12px;
-  min-height: 96px;
-  padding: 14px;
+  gap: 14px;
+  min-height: 104px;
+  padding: 18px 16px;
 }
 
 .metric-icon {
@@ -1610,9 +1672,9 @@ button:disabled {
 
 .summary-metric-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
-  gap: 10px;
-  margin-top: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
 }
 
 .summary-issue {
@@ -1621,6 +1683,84 @@ button:disabled {
 
 .summary-issue strong {
   color: var(--color-text);
+}
+
+.app-fallback {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--color-bg, #f4f1e8);
+  color: var(--color-text, #1d1d1b);
+  padding: 2rem;
+}
+
+.app-fallback section {
+  max-width: 620px;
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  border-radius: 12px;
+  background: var(--color-surface, #fffaf0);
+  padding: 2rem;
+}
+
+.ai-coach-box,
+.ai-summary-box {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-2);
+  margin-top: 14px;
+  padding: 14px;
+}
+
+.ai-coach-box strong,
+.ai-summary-box strong {
+  color: var(--color-text);
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+
+.ai-status {
+  justify-self: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+}
+
+.ai-status-ready {
+  color: var(--color-step-badge-text);
+}
+
+.ai-status-error,
+.ai-status-gemini_error {
+  color: var(--color-accent-label);
+}
+
+.coach-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.coach-toggle-row button {
+  min-height: 34px;
+  border: 1px solid var(--color-ghost-border);
+  border-radius: var(--radius-full);
+  background: var(--color-ghost-bg);
+  color: var(--color-ghost-text);
+  font-size: 0.76rem;
+  padding: 7px 11px;
+}
+
+.coach-error {
+  color: var(--color-accent-label);
+  font-size: 0.82rem;
 }
 
 .rep-timing-list,
@@ -2263,7 +2403,7 @@ button:disabled {
 .live-panel,
 .progress-panel,
 .summary-panel {
-  padding: 1.75rem;
+  padding: 2.25rem;
 }
 
 .ghost-button,
@@ -2584,5 +2724,312 @@ button:disabled {
 
   .exercise-card {
     min-height: auto;
+  }
+}
+
+/* ── Results page ────────────────────────────────────────────── */
+
+.results-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 clamp(20px, 4vw, 56px) 80px;
+}
+
+.results-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 36px;
+  flex-wrap: wrap;
+}
+
+.results-page-header h1 {
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 6px 0 4px;
+  line-height: 1.1;
+}
+
+.muted-sub {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 20px;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: rgba(86, 216, 167, 0.12);
+  border-color: var(--mint);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Session history list ──────────────────────────────────── */
+
+.session-history {
+  margin-top: 52px;
+}
+
+.session-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.history-count {
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 3px 12px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* override old grid-based layout rules that cascade from earlier in the sheet */
+.results-page .history-card {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  transition: border-color 0.15s;
+  padding: 0;
+  gap: 0;
+}
+
+.results-page .summary-panel {
+  display: block;
+}
+
+.results-page .history-card:hover,
+.results-page .history-card--open {
+  border-color: rgba(86, 216, 167, 0.4);
+}
+
+.results-page .history-card-row {
+  display: grid;
+  grid-template-columns: 130px 1fr repeat(4, minmax(56px, 0.7fr)) 28px;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 18px 20px;
+  background: transparent;
+  border: none;
+  border-radius: 14px;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.results-page .history-card--open .history-card-row {
+  border-radius: 14px 14px 0 0;
+}
+
+.results-page .history-card-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.history-card-date {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history-date-main {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.history-date-time {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.history-card-exercise {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.history-card-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.hstat-value {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.hstat-label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.history-chevron {
+  font-size: 0.65rem;
+  color: var(--muted);
+  justify-self: end;
+}
+
+.history-card-detail {
+  border-top: 1px solid var(--line);
+  padding: 28px 28px 32px;
+}
+
+/* ── History card detail: wide stat grid ────────────────────────────── */
+
+.hdetail-blurb {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 20px;
+  max-width: 680px;
+  line-height: 1.5;
+}
+
+.hdetail-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.hdetail-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.hds-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hds-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.hds-value small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+/* ── History card detail: rep table ────────────────────────────────── */
+
+.hdetail-reps {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.hdetail-reps-heading {
+  margin: 0 0 14px !important;
+}
+
+.hdetail-rep-table {
+  display: grid;
+  grid-template-columns: 48px 72px 72px 88px 56px 80px 1fr;
+  gap: 0;
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.hdr-head {
+  padding: 9px 12px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line);
+}
+
+.hdetail-rep-table > span:not(.hdr-head) {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  display: flex;
+  align-items: center;
+}
+
+.hdetail-rep-table > span:last-child,
+.hdetail-rep-table > span:nth-last-child(-n+7):not(.hdr-head) {
+  border-bottom: none;
+}
+
+.hdr-num { font-weight: 700; }
+.hdr-good { color: var(--mint); font-weight: 600; }
+.hdr-ok   { color: var(--amber); font-weight: 600; }
+.hdr-bad  { color: var(--coral); font-weight: 600; }
+.hdr-clean { color: var(--mint); }
+.hdr-issue { color: var(--coral); }
+
+@media (max-width: 700px) {
+  .results-page .history-card-row {
+    grid-template-columns: 1fr repeat(2, minmax(52px, 0.7fr)) 24px;
+    gap: 10px;
+    padding: 14px 16px;
+  }
+  .history-card-exercise,
+  .results-page .history-card-stat:nth-child(5),
+  .results-page .history-card-stat:nth-child(6) {
+    display: none;
+  }
+  .history-card-detail {
+    padding: 20px 16px 24px;
+  }
+  .hdetail-rep-table {
+    grid-template-columns: 40px 60px 60px 72px 48px 1fr;
+  }
+  .hdetail-rep-table .hdr-head:nth-child(6),
+  .hdetail-rep-table > span:nth-child(7n) {
+    display: none;
   }
 }

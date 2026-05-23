@@ -68,7 +68,9 @@ export default function LiveSession({
   showDebug = true,
   exercise,
   exerciseTitle = "Elbow Flexion / Extension",
-  recordingActive = true
+  recordingActive = true,
+  overlayCoachMessage = "",
+  bonusRepRequested = false
 }) {
   const percent = anglePercent(packet, exercise);
   const pythonMode = sourceMode === "python";
@@ -110,7 +112,9 @@ export default function LiveSession({
             side={packet?.side || exercise?.side || "right"}
             exercise={exercise}
             recordingActive={recordingActive}
+            overlayCoachMessage={overlayCoachMessage}
             onPacket={onBrowserPacket}
+            bonusRepRequested={bonusRepRequested}
           />
         ) : (
           <AngleDial packet={packet} exercise={exercise} />

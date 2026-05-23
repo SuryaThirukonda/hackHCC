@@ -91,9 +91,11 @@ function exerciseTargetAngle(exercise) {
 function repPhaseForAnalyzerPhase(phase) {
   return {
     WAITING_FOR_START: "idle",
+    STRAIGHTEN_TO_START: "lowering",
     EXTENDED_READY: "resting",
     FLEXING: "raising",
     FLEXED_HOLD: "holding",
+    HOLD_COMPLETE: "holding",
     EXTENDING: "lowering",
     REP_COMPLETE: "rep_complete",
     SESSION_COMPLETE: "rep_complete"
@@ -103,9 +105,11 @@ function repPhaseForAnalyzerPhase(phase) {
 function humanPhaseForAnalyzerPhase(phase) {
   return {
     WAITING_FOR_START: "Start straight",
+    STRAIGHTEN_TO_START: "Straighten",
     EXTENDED_READY: "Ready",
     FLEXING: "Bending",
     FLEXED_HOLD: "Hold",
+    HOLD_COMPLETE: "Extend now",
     EXTENDING: "Straighten",
     REP_COMPLETE: "Rep complete",
     SESSION_COMPLETE: "Complete"
@@ -208,7 +212,16 @@ async function browserCameraPermissionGranted() {
   }
 }
 
-export default function BrowserPoseOverlay({ active, sessionId, onPacket, side = "right", exercise, recordingActive = true }) {
+export default function BrowserPoseOverlay({
+  active,
+  sessionId,
+  onPacket,
+  side = "right",
+  exercise,
+  recordingActive = true,
+  overlayCoachMessage = "",
+  bonusRepRequested = false
+}) {
   const activeSide = POSE[side] ? side : "right";
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -229,6 +242,20 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
   const [cameraState, setCameraState] = useState("idle");
   const [cameraError, setCameraError] = useState("");
   const [debugMode, setDebugMode] = useState(false);
+
+  const recordingActiveRef = useRef(recordingActive);
+  const overlayCoachMessageRef = useRef(overlayCoachMessage);
+  const onPacketRef = useRef(onPacket);
+  const exerciseRef = useRef(exercise);
+  const sessionIdRef = useRef(sessionId);
+  const activeSideRef = useRef(activeSide);
+
+  useEffect(() => { recordingActiveRef.current = recordingActive; }, [recordingActive]);
+  useEffect(() => { overlayCoachMessageRef.current = overlayCoachMessage; }, [overlayCoachMessage]);
+  useEffect(() => { onPacketRef.current = onPacket; }, [onPacket]);
+  useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { activeSideRef.current = activeSide; }, [activeSide]);
 
   useEffect(() => {
     let cancelled = false;
@@ -265,6 +292,11 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
     }
     previousRecordingRef.current = recordingActive;
   }, [recordingActive]);
+  useEffect(() => {
+    if (bonusRepRequested && analyzerRef.current?.extendRepGoal) {
+      analyzerRef.current.extendRepGoal(1);
+    }
+  }, [bonusRepRequested]);
 
   async function createLandmarkers(delegate = "GPU") {
     const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
@@ -374,6 +406,10 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
   }
 
   function buildPacket(poseLandmarks, handLandmarks, timestampMs) {
+    const exercise = exerciseRef.current;
+    const activeSide = activeSideRef.current;
+    const recordingActive = recordingActiveRef.current;
+    const sessionId = sessionIdRef.current;
     const targetAngle = exerciseTargetAngle(exercise);
     const indices = POSE[activeSide];
     const poseDetected = Boolean(poseLandmarks?.length);
@@ -411,15 +447,15 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
 
     const motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
     const combinedJitter = validAnalysis ? motion.jitter / 2 : 0;
-    const currentRange = validAnalysis
-      ? elbowAngle <= exercise?.targetPosition?.elbowAngleMax && elbowAngle >= exercise?.targetPosition?.elbowAngleMin
+    const currentRange = validAnalysis && exercise?.targetPosition
+      ? elbowAngle <= exercise.targetPosition.elbowAngleMax && elbowAngle >= exercise.targetPosition.elbowAngleMin
         ? "target_met"
-        : elbowAngle > exercise?.targetPosition?.elbowAngleMax
+        : elbowAngle > exercise.targetPosition.elbowAngleMax
           ? "almost_there"
           : "overextended"
       : "unknown";
     const analyzerFrame = {
-      timestampMs: Math.round(Date.now()),
+      timestampMs: Math.round(timestampMs),
       elbowAngle: validAnalysis ? elbowAngle : null,
       shoulderAngle: validAnalysis ? upperArmAngle : null,
       landmarkConfidence: confidence,
@@ -492,12 +528,13 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
     ctx.fillRect(12, 12, 520, 168);
     ctx.fillStyle = "#56d8a7";
     ctx.font = "800 20px Segoe UI";
-    ctx.fillText(`Physio | ${exercise?.shortName || "webcam tracking"}`, 28, 44);
+    ctx.fillText(`Physio | ${exerciseRef.current?.shortName || "webcam tracking"}`, 28, 44);
     ctx.fillStyle = "#f4f1e8";
     ctx.font = "700 18px Segoe UI";
     ctx.fillText(`Upper arm ${formatMaybeAngle(packet.shoulder_angle)} deg | Elbow ${formatMaybeAngle(packet.elbow_angle)} deg`, 28, 78);
     ctx.fillText(`Rep ${packet.rep_count} | ${packet.analyzer_phase_label || packet.rep_phase} | Score ${packet.physio_score ?? "--"}`, 28, 110);
-    ctx.fillText(packet.local_coach_message, 28, 142);
+    const coachLine = overlayCoachMessageRef.current || packet.ai_coach_message || packet.local_coach_message;
+    ctx.fillText(coachLine, 28, 142);
 
     for (const landmarks of handLandmarks) {
       const points = landmarks.map((landmark) => pixel(landmark, width, height));
@@ -553,7 +590,7 @@ export default function BrowserPoseOverlay({ active, sessionId, onPacket, side =
 
   async function postLatestPacket(packet) {
     latestPacketRef.current = packet;
-    onPacket?.(packet);
+    onPacketRef.current?.(packet);
     if (debugModeRef.current) {
       console.log("Physio analysis debug", {
         shoulder: packet._debug_landmarks?.shoulder || null,

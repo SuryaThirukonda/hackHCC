@@ -37,6 +37,6 @@ class MockCoachProvider(CoachProvider):
     def generate_cue(self, packet: PhysioPacket) -> CoachCue:
         return CoachCue(
             coach_state=packet.coach_state,
-            message=clean_coach_text(coach_message_for_packet(packet)),
+            message=clean_coach_text(coach_message_for_packet(packet), packet.local_coach_message),
             source="mock"
         )

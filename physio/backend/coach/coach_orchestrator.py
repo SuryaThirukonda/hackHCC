@@ -42,14 +42,9 @@ class CoachOrchestrator:
         should_speak, reason = self._should_speak(packet, message, memory, now_ms)
 
         voice_result = VoiceResult(status="idle")
-        avatar_result = AvatarResult(status="idle")
+        avatar_result = AvatarResult(status="disabled")
         if should_speak:
             voice_result = self.voice_provider.synthesize(message)
-            avatar_result = self.avatar_provider.speak(
-                message,
-                voice_result.local_file_path,
-                self._public_audio_url(voice_result.audio_url),
-            )
             memory.last_spoken_ms = now_ms
             memory.last_spoken_message = message
 

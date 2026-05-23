@@ -16,7 +16,8 @@ export const elbowFlexionExtension = {
     "Straighten your arm with control.",
     "Keep your upper arm as still as possible."
   ],
-  repGoal: 8,
+  repGoal: 3,
+  bonusRepAvailable: true,
   startPosition: {
     elbowAngleMin: 145,
     elbowAngleMax: 180
@@ -25,7 +26,7 @@ export const elbowFlexionExtension = {
     elbowAngleMin: 55,
     elbowAngleMax: 95
   },
-  holdSeconds: 1.0,
+  holdSeconds: 2.5,
   minRepSeconds: 2.0,
   maxRepSeconds: 6.0,
   jitterThreshold: 0.35,

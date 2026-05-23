@@ -1,18 +1,30 @@
 import { Activity, ClipboardCheck, Clock3, Gauge, Repeat2, ShieldCheck, Target, Waves } from "lucide-react";
 import MetricCard from "./MetricCard.jsx";
 
-export default function SessionSummary({ summary }) {
+export default function SessionSummary({ summary, aiSummaryText, aiHealthReport, compact = false }) {
   return (
     <section className="summary-panel">
-      <div className="summary-icon">
-        <ClipboardCheck size={20} />
-      </div>
+      {!compact && (
+        <div className="summary-icon">
+          <ClipboardCheck size={20} />
+        </div>
+      )}
       <div>
-        <p className="eyebrow">Latest summary</p>
+        {!compact && <p className="eyebrow">Latest summary</p>}
         {summary ? (
           <>
             <h2>{summary.summary_text}</h2>
             <p>{summary.recommendation_text}</p>
+            <div className="ai-summary-box">
+              <p className="eyebrow">AI-written session summary</p>
+              <strong>{aiSummaryText || summary.recommendation_text}</strong>
+            </div>
+            {aiHealthReport && (
+              <div className="ai-summary-box ai-health-box">
+                <p className="eyebrow">AI health observations</p>
+                <p>{aiHealthReport}</p>
+              </div>
+            )}
             <div className="summary-metric-grid">
               <MetricCard icon={Activity} label="Exercise" value={exerciseLabel(summary.exercise)} accent="mint" />
               <MetricCard icon={Clock3} label="Session time" value={formatSummaryMetric(summary.duration_sec, 0)} unit="s" accent="blue" />

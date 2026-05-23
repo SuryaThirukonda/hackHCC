@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from coach.coach_orchestrator import CoachOrchestrator
+from coach.base import clean_coach_text
+from coach.gemini_coach import GeminiCoachProvider, sanitize_gemini_error
+from coach.voice_provider import get_voice_provider
 from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
@@ -23,7 +27,7 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
-from sqlite_store import SQLitePhysioStore
+from storage_provider import get_session_store
 
 
 load_env_file()
@@ -66,12 +70,43 @@ class SessionState:
 state = SessionState()
 mock_generator = MockPacketGenerator()
 coach_orchestrator = CoachOrchestrator()
-store = SQLitePhysioStore()
+store = get_session_store()
 websockets: set[WebSocket] = set()
-
 
 SOURCE_RECENT_WINDOW_SEC = 2.5
 FRAME_RECENT_WINDOW_SEC = 3.0
+
+
+def waiting_for_real_packet() -> PhysioPacket:
+    return PhysioPacket(
+        session_id=state.session_id,
+        timestamp_ms=int(time.time() * 1000),
+        exercise=state.exercise,
+        side=state.side,
+        device_id="opencv-waiting",
+        sensor_status="offline",
+        camera_status="warning",
+        distance_cm=None,
+        sensor_jitter_score=0,
+        opencv_jitter_score=0,
+        combined_jitter_score=0,
+        jitter_detected=False,
+        shoulder_angle=0,
+        elbow_angle=0,
+        target_angle=state.target_angle,
+        landmark_confidence=0,
+        rep_count=0,
+        rep_phase="idle",
+        hold_time_sec=0,
+        pace="unknown",
+        range_status="unknown",
+        compensation="unknown",
+        physio_score=0,
+        coach_state="low_confidence",
+        local_coach_message="Waiting for OpenCV packets from pose_tracker.py.",
+        avatar_status="idle",
+        voice_status="idle",
+    )
 
 
 def source_age_ms(source: str) -> int:
@@ -149,8 +184,8 @@ def health() -> dict[str, str]:
 def coach_provider_status() -> dict[str, Any]:
     return {
         "providers": coach_orchestrator.provider_status(),
+        "gemini": GeminiCoachProvider.debug_status(),
         "env": {
-            "gemini_key_configured": configured_secret("GEMINI_API_KEY"),
             "elevenlabs_key_configured": configured_secret("ELEVENLABS_API_KEY"),
             "elevenlabs_voice_configured": configured_secret("ELEVENLABS_VOICE_ID"),
             "heygen_key_configured": configured_secret("HEYGEN_API_KEY"),
@@ -184,14 +219,15 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
     coach_orchestrator.reset_session(session_id)
-    store.save_session_start(
-        session_id=session_id,
-        user_id=state.user_id,
-        exercise=state.exercise,
-        side=state.side,
-        target_angle=state.target_angle,
-        started_at_ms=state.started_at_ms,
-    )
+    if hasattr(store, "save_session_start"):
+        store.save_session_start(
+            session_id=session_id,
+            user_id=state.user_id,
+            exercise=state.exercise,
+            side=state.side,
+            target_angle=state.target_angle,
+            started_at_ms=state.started_at_ms,
+        )
     return SessionStartResponse(session_id=session_id, status="started")
 
 
@@ -283,6 +319,183 @@ def coach_cue(packet: PhysioPacket) -> CoachCueResponse:
     return coach_orchestrator.cue_for_packet(normalized)
 
 
+def _safe_ai_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "exercise_id",
+        "exercise_name",
+        "mode",
+        "phase",
+        "phase_label",
+        "movement_instruction",
+        "rep_count",
+        "rep_goal",
+        "elbow_angle",
+        "target_elbow_range",
+        "hold_time_sec",
+        "pace",
+        "jitter_score",
+        "shoulder_drift",
+        "coach_state",
+        "local_coach_message",
+        "physio_score",
+    }
+    return {key: packet.get(key) for key in allowed if key in packet}
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("gemini_response_missing_json")
+    return json.loads(text[start:end + 1])
+
+
+def _usable_text(text: str, fallback: str, min_words: int) -> str:
+    cleaned = clean_coach_text(text, fallback)
+    if len(cleaned.split()) < min_words:
+        return fallback
+    return cleaned
+
+
+def _short_error(exc: Exception) -> str:
+    return sanitize_gemini_error(exc)
+
+
+@app.post("/api/ai/gemini-coach")
+def ai_gemini_coach(payload: dict[str, Any]) -> dict[str, Any]:
+    packet = _safe_ai_packet(payload.get("packet") or {})
+    fallback = clean_coach_text(
+        str(packet.get("local_coach_message") or "Keep moving with control."),
+        "Keep moving with control.",
+    )
+    provider = GeminiCoachProvider()
+    if not provider.vertex_enabled:
+        return {
+            "ok": False,
+            "text": fallback,
+            "source": "local",
+            "status": "vertex_disabled",
+            "error": GeminiCoachProvider.debug_status().get("last_error"),
+        }
+
+    prompt = (
+        "You are a calm physical therapy voice coach. Using only the structured text packet, "
+        "return one short spoken cue (max 14 words) for the current movement phase. "
+        "Be encouraging, gentle, and concrete. Do not diagnose or mention injury. "
+        "Follow movement_instruction when present. Text only, no markdown. "
+        f"Packet: {json.dumps(packet, sort_keys=True)}"
+    )
+    try:
+        text = _usable_text(provider._generate_text(prompt, max_output_tokens=96), fallback, 2)
+        return {"ok": True, "text": text, "source": "gemini", "status": "ready"}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "text": fallback,
+            "source": "local",
+            "status": "gemini_error",
+            "error": _short_error(exc),
+        }
+
+
+@app.post("/api/ai/session-summary")
+def ai_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary") or {}
+    fallback = clean_coach_text(
+        str(summary.get("recommendation_text") or "Keep the same controlled pace next session."),
+        "Keep the same controlled pace next session.",
+    )
+    provider = GeminiCoachProvider()
+    if not provider.vertex_enabled:
+        return {
+            "ok": False,
+            "text": fallback,
+            "source": "local",
+            "status": "vertex_disabled",
+            "error": GeminiCoachProvider.debug_status().get("last_error"),
+        }
+
+    safe_summary = {
+        key: summary.get(key)
+        for key in (
+            "exercise",
+            "duration_sec",
+            "total_reps",
+            "clean_reps",
+            "rep_goal",
+            "best_range_of_motion",
+            "average_range_of_motion",
+            "average_physio_score",
+            "average_jitter_score",
+            "average_hold_time_sec",
+            "average_rep_duration_sec",
+            "common_issue",
+            "issue_label",
+            "pain_level",
+            "fatigue_level",
+            "recommendation_text",
+            "completed_reps",
+        )
+        if key in summary
+    }
+    prompt = (
+        "You are a physical therapy assistant reviewing OpenCV-tracked elbow flexion metrics. "
+        "Return JSON only with keys: summary_text, recommendation_text, health_report. "
+        "summary_text: 2 calm sentences about session performance. "
+        "recommendation_text: one focus for the next session (under 24 words). "
+        "health_report: 2-3 calm, non-diagnostic observations about range, control, fatigue, and consistency. "
+        "Use only the structured metrics below. No diagnosis. "
+        f"Metrics: {json.dumps(safe_summary, sort_keys=True)}"
+    )
+    try:
+        raw = provider._generate_text(prompt, max_output_tokens=320)
+        parsed = _extract_json_object(raw)
+        recommendation = clean_coach_text(
+            str(parsed.get("recommendation_text", fallback)),
+            fallback,
+        )
+        health_report = clean_coach_text(
+            str(parsed.get("health_report", "")),
+            "",
+        )
+        if len(health_report.split()) < 6:
+            health_report = clean_coach_text(
+                str(parsed.get("summary_text", recommendation)),
+                recommendation,
+            )
+        return {
+            "ok": True,
+            "text": recommendation,
+            "health_report": health_report,
+            "source": "gemini",
+            "status": "ready",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "text": fallback,
+            "health_report": "",
+            "source": "local",
+            "status": "gemini_error",
+            "error": _short_error(exc),
+        }
+
+
+@app.post("/api/ai/elevenlabs-tts")
+def ai_elevenlabs_tts(payload: dict[str, Any]) -> dict[str, Any]:
+    text = clean_coach_text(str((payload or {}).get("text") or ""), "")
+    if not text:
+        return {"ok": False, "status": "empty_text", "audio_url": None}
+    result = get_voice_provider().synthesize(text)
+    return {
+        "ok": result.status == "ready",
+        "status": result.status,
+        "audio_url": result.audio_url,
+        "local_file_path": result.local_file_path,
+        "error": result.error_message,
+    }
+
+
 @app.post("/api/session/end", response_model=SessionSummary)
 def end_session(request: SessionEndRequest) -> SessionSummary:
     packets = [packet for packet in state.packets if packet.session_id == request.session_id]
@@ -338,6 +551,21 @@ def end_session(request: SessionEndRequest) -> SessionSummary:
 @app.get("/api/sessions", response_model=list[SessionSummary])
 def list_sessions() -> list[SessionSummary]:
     return store.list_summaries()
+
+
+@app.post("/api/session/save-result")
+def save_session_result(payload: dict[str, Any]) -> dict[str, Any]:
+    session_id = str(payload.get("session_id") or "unknown")
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty payload")
+    result_json = json.dumps(payload)
+    store.save_session_result(session_id, result_json)
+    return {"status": "saved", "session_id": session_id}
+
+
+@app.get("/api/session/results")
+def list_session_results() -> list[dict[str, Any]]:
+    return store.list_session_results()
 
 
 @app.get("/api/storage/status")
