@@ -36,6 +36,7 @@ import {
   resolveOverlayCoachMessage,
   resolveSpokenCoachCue
 } from "./ai/coachVoiceScript.js";
+import { buildCompactReplayGraph } from "./recording/buildCompactReplayGraph.js";
 import { speakCoachCue } from "./ai/elevenLabsClient.js";
 import CoachPanel from "./components/CoachPanel.jsx";
 import BlobCoachCompanion from "./components/coach/BlobCoachCompanion.jsx";
@@ -45,6 +46,7 @@ import LiveSession from "./components/LiveSession.jsx";
 import ProgressDashboard from "./components/ProgressDashboard.jsx";
 import SessionSummary from "./components/SessionSummary.jsx";
 import ResultsPresentationPanel from "./components/results/ResultsPresentationPanel.jsx";
+import SessionReplayOverlay from "./components/results/SessionReplayOverlay.jsx";
 import { defaultExercise, exercises } from "./exercises/index.js";
 import { useSessionRecorder } from "./recording/useSessionRecorder.js";
 import {
@@ -76,6 +78,16 @@ const IMPORTANT_VOICE_STATES = new Set([
   "bend_more",
   "hold_longer"
 ]);
+
+function primeBrowserAudio() {
+  try {
+    const audio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAA=");
+    audio.volume = 0.01;
+    return audio.play().catch(() => {});
+  } catch {
+    return Promise.resolve();
+  }
+}
 
 function initialSourceMode() {
   const requested = new URLSearchParams(window.location.search).get("source");
@@ -264,6 +276,7 @@ export default function App() {
   }, [recorder, runner.status, sourceMode]);
 
   const handleRoutineBegin = useCallback(() => {
+    primeBrowserAudio();
     setLive(true);
     setActiveTab("live");
     if (!isRecordingState(runner.status)) {
@@ -467,6 +480,7 @@ export default function App() {
   }
 
   async function beginExercise() {
+    primeBrowserAudio();
     setSourceMode("browser");
     const sessionToken = sessionStartTokenRef.current + 1;
     sessionStartTokenRef.current = sessionToken;
@@ -546,7 +560,7 @@ export default function App() {
     setGeminiSessionAnalysis(null);
     setGeminiSessionStatus("loading");
     setGeminiSessionError("");
-    generateGeminiSessionAnalysis(finalPacket)
+    generateGeminiSessionAnalysis(finalPacket, localSummary)
       .then((result) => {
         const status = result.fallback_used ? "fallback" : "ready";
         const cacheEntry = saveGeminiSessionAnalysisCache({
@@ -560,7 +574,7 @@ export default function App() {
         setGeminiSessionStatus(status);
         setAiSummaryText(result.analysis?.written_summary || localSummary.recommendation_text);
         setAiHealthReport(result.analysis?.focus_next_time || "");
-        setGeminiSessionError(result.error_message_sanitized || "");
+        setGeminiSessionError(result.fallback_used ? "" : (result.error_message_sanitized || ""));
         setGeminiAnalysisCache(cacheEntry);
         persistPresentationCache(activeSession, {
           summary: localSummary,
@@ -598,7 +612,8 @@ export default function App() {
       .then((recording) => {
         if (recording) {
           setSessionRecording(recording);
-          persistPresentationCache(activeSession, { recording });
+          const replayGraph = buildCompactReplayGraph(recording);
+          persistPresentationCache(activeSession, { recording, replay_graph: replayGraph });
         }
       })
       .catch(() => {});
@@ -887,13 +902,24 @@ function resolveFeaturedPresentation({
       geminiResult: geminiSessionAnalysis,
       geminiStatus: geminiSessionStatus,
       geminiError: geminiSessionError,
-      geminiCache: geminiAnalysisCache,
-      recording: sessionRecording,
+      geminiCache: geminiAnalysisCache?.session_id === featuredSession.session_id ? geminiAnalysisCache : null,
+      recording: sessionRecording || cache?.replay_graph || cache?.recording || null,
       finalAnalysisPacket
     };
   }
 
-  if (!cache) return null;
+  if (!cache) {
+    return {
+      sessionId: featuredSession.session_id,
+      summary: featuredSession,
+      geminiResult: null,
+      geminiStatus: "idle",
+      geminiError: "",
+      geminiCache: null,
+      recording: null,
+      finalAnalysisPacket: null
+    };
+  }
 
   return {
     sessionId: featuredSession.session_id,
@@ -902,7 +928,7 @@ function resolveFeaturedPresentation({
     geminiStatus: cache.gemini_status || (cache.gemini_result ? "ready" : "idle"),
     geminiError: cache.gemini_error || "",
     geminiCache: cache.gemini_cache || null,
-    recording: cache.recording || null,
+    recording: cache.replay_graph || cache.recording || null,
     finalAnalysisPacket: cache.final_analysis_packet || null
   };
 }
@@ -1205,6 +1231,7 @@ function ResultsPage({
                   <HistoryCard
                     key={sess.session_id}
                     session={sess}
+                    presentationCaches={presentationCaches}
                     expanded={expandedId === sess.session_id}
                     onToggle={() => setExpandedId(expandedId === sess.session_id ? null : sess.session_id)}
                   />
@@ -1218,7 +1245,27 @@ function ResultsPage({
   );
 }
 
-function HistoryCard({ session, expanded, onToggle }) {
+function resolveSessionRecording(session, presentationCaches) {
+  const cache = presentationCaches?.[session?.session_id];
+  if (!cache) return null;
+  return cache.replay_graph || cache.recording || null;
+}
+
+function historyReplayReps(session, recording) {
+  if (recording?.reps?.length) return recording.reps;
+  if (!Array.isArray(session?.completed_reps)) return [];
+  return session.completed_reps.map((rep) => ({
+    rep_number: rep.rep_index,
+    rep_index: rep.rep_index,
+    physio_score: rep.physio_score,
+    jitter_score: rep.jitter_score,
+    issue: rep.issue,
+    issue_label: rep.issue,
+    clean: rep.clean ?? rep.issue === "none"
+  }));
+}
+
+function HistoryCard({ session, presentationCaches, expanded, onToggle }) {
   const date = session.ended_at_ms
     ? new Date(session.ended_at_ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
     : "—";
@@ -1230,6 +1277,8 @@ function HistoryCard({ session, expanded, onToggle }) {
   const avgRom = session.average_range_of_motion ?? session.average_angle;
   const isForwardPressSession = session.exercise === "seated_one_arm_forward_press";
   const bestPushDepth = session.best_push_depth_cm;
+  const recording = resolveSessionRecording(session, presentationCaches);
+  const replayReps = historyReplayReps(session, recording);
 
   return (
     <div className={`history-card${expanded ? " history-card--open" : ""}`}>
@@ -1268,6 +1317,10 @@ function HistoryCard({ session, expanded, onToggle }) {
           {session.recommendation_text && (
             <p className="hdetail-blurb">{session.recommendation_text}</p>
           )}
+
+          <div className="hdetail-replay">
+            <SessionReplayOverlay samples={recording?.samples || []} reps={replayReps} />
+          </div>
 
           {/* wide stat grid */}
           <div className="hdetail-stat-grid">

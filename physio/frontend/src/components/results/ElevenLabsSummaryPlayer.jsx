@@ -35,11 +35,21 @@ export default function ElevenLabsSummaryPlayer({
   const fetchedRef = useRef(false);
   const requestKeyRef = useRef("");
   const autoPlayAttemptedRef = useRef(false);
+  const onStatusChangeRef = useRef(onStatusChange);
+  const onAudioUrlRef = useRef(onAudioUrl);
+  const onPlaybackStartRef = useRef(onPlaybackStart);
+  const onPlaybackProgressRef = useRef(onPlaybackProgress);
+  const onPlaybackEndRef = useRef(onPlaybackEnd);
+  onStatusChangeRef.current = onStatusChange;
+  onAudioUrlRef.current = onAudioUrl;
+  onPlaybackStartRef.current = onPlaybackStart;
+  onPlaybackProgressRef.current = onPlaybackProgress;
+  onPlaybackEndRef.current = onPlaybackEnd;
 
   const updateStatus = useCallback((nextStatus) => {
     setStatus(nextStatus);
-    onStatusChange?.(nextStatus);
-  }, [onStatusChange]);
+    onStatusChangeRef.current?.(nextStatus);
+  }, []);
 
   const stopAudio = useCallback((nextStatus = "ready") => {
     if (audioRef.current) {
@@ -47,9 +57,9 @@ export default function ElevenLabsSummaryPlayer({
       audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
-    onPlaybackEnd?.();
+    onPlaybackEndRef.current?.();
     updateStatus(nextStatus);
-  }, [onPlaybackEnd, updateStatus]);
+  }, [updateStatus]);
 
   const synthesize = useCallback(async () => {
     if (!spokenSummary) return;
@@ -60,7 +70,7 @@ export default function ElevenLabsSummaryPlayer({
       if (result.ok && result.audio_url) {
         setAudioUrl(result.audio_url);
         updateStatus("ready");
-        onAudioUrl?.(result.audio_url);
+        onAudioUrlRef.current?.(result.audio_url);
       } else {
         updateStatus("error");
         setError(result.error_message_sanitized || "TTS unavailable");
@@ -69,7 +79,7 @@ export default function ElevenLabsSummaryPlayer({
       updateStatus("error");
       setError(err.message);
     }
-  }, [spokenSummary, sessionId, onAudioUrl, updateStatus]);
+  }, [spokenSummary, sessionId, updateStatus]);
 
   useEffect(() => {
     const requestKey = `${sessionId || "session"}:${spokenSummary || ""}`;
@@ -99,22 +109,22 @@ export default function ElevenLabsSummaryPlayer({
 
     audio.onplay = () => {
       updateStatus("playing");
-      onPlaybackStart?.();
-      onPlaybackProgress?.(0);
+      onPlaybackStartRef.current?.();
+      onPlaybackProgressRef.current?.(0);
     };
     audio.ontimeupdate = () => {
       const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 1;
-      onPlaybackProgress?.(Math.min(1, audio.currentTime / duration));
+      onPlaybackProgressRef.current?.(Math.min(1, audio.currentTime / duration));
     };
     audio.onended = () => {
       audioRef.current = null;
-      onPlaybackProgress?.(1);
-      onPlaybackEnd?.();
+      onPlaybackProgressRef.current?.(1);
+      onPlaybackEndRef.current?.();
       updateStatus("ready");
     };
     audio.onerror = () => {
       audioRef.current = null;
-      onPlaybackEnd?.();
+      onPlaybackEndRef.current?.();
       updateStatus("error");
       setError("Browser could not play the generated audio.");
     };
@@ -122,10 +132,10 @@ export default function ElevenLabsSummaryPlayer({
     updateStatus("playing");
     audio.play().catch(() => {
       audioRef.current = null;
-      onPlaybackEnd?.();
+      onPlaybackEndRef.current?.();
       updateStatus("blocked");
     });
-  }, [audioUrl, muted, onPlaybackEnd, onPlaybackProgress, onPlaybackStart, updateStatus]);
+  }, [audioUrl, muted, updateStatus]);
 
   useEffect(() => {
     if (autoPlay && status === "ready" && audioUrl && !muted && !autoPlayAttemptedRef.current) {

@@ -19,7 +19,7 @@ export default function GeminiSessionAnalysisPanel({
   localRecommendation = "",
   cachedResult = null
 }) {
-  const resolvedResult = result || geminiResult || cachedResult?.result || null;
+  const resolvedResult = result || geminiResult || (cachedResult?.session_id === packet?.session?.session_id ? cachedResult?.result : null) || null;
   const analysis = resolvedResult?.analysis || null;
   const local = packet?.local_summary || {};
   const cachedAt = cachedResult?.cached_at_ms

@@ -1,4 +1,4 @@
-import { request, resolveApiUrl } from "./client.js";
+import { generateElevenLabsSpeech, request, resolveApiUrl } from "./client.js";
 
 export async function saveRecordingV2(recording) {
   return request("/api/recordings/v2/session", {
@@ -20,16 +20,50 @@ export async function getPresentationStatus() {
 }
 
 export async function requestElevenLabsSummary(text, sessionId) {
-  const result = await request("/api/presentation/v2/elevenlabs-summary", {
-    method: "POST",
-    body: JSON.stringify({ text, session_id: sessionId })
-  });
-  return {
-    ...result,
-    audio_url: result.audio_url
-      ? resolveApiUrl(result.audio_url, "/api/presentation/v2")
-      : result.audio_url
-  };
+  const spokenText = String(text || "").trim();
+  if (!spokenText) {
+    return { ok: false, status: "empty_text", audio_url: null, error_message_sanitized: "No text provided" };
+  }
+
+  try {
+    const result = await request("/api/presentation/v2/elevenlabs-summary", {
+      method: "POST",
+      body: JSON.stringify({ text: spokenText, session_id: sessionId })
+    });
+    if (result.ok && result.audio_url) {
+      return {
+        ...result,
+        audio_url: resolveApiUrl(result.audio_url, "/api/presentation/v2")
+      };
+    }
+  } catch {
+    // Fall through to legacy TTS route.
+  }
+
+  try {
+    const legacy = await generateElevenLabsSpeech(spokenText);
+    if (legacy?.ok && legacy.audio_url) {
+      return {
+        ok: true,
+        status: legacy.status || "ready",
+        audio_url: resolveApiUrl(legacy.audio_url, "/api"),
+        error_message_sanitized: legacy.error || null
+      };
+    }
+    return {
+      ok: false,
+      status: legacy?.status || "error",
+      audio_url: null,
+      error_message_sanitized: legacy?.error || "TTS unavailable"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "error",
+      audio_url: null,
+      error_message_sanitized: error.message || "TTS unavailable"
+    };
+  }
 }
 
 export async function requestHeyGenCoach(spokenSummary, audioUrl, sessionId) {

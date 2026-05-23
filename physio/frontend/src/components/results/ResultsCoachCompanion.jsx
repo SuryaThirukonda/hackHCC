@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import ElevenLabsSummaryPlayer from "./ElevenLabsSummaryPlayer.jsx";
 
 /**
@@ -18,13 +18,20 @@ export default function ResultsCoachCompanion({
   const written = geminiAnalysis?.written_summary || "";
   const displayText = written || spoken;
 
+  const voiceStatusRef = useRef("idle");
+  const onVoiceStatusChangeRef = useRef(onVoiceStatusChange);
+  onVoiceStatusChangeRef.current = onVoiceStatusChange;
+
   const handleVoiceStatus = useCallback((nextStatus) => {
+    if (voiceStatusRef.current === nextStatus) return;
+    voiceStatusRef.current = nextStatus;
     setVoiceStatus(nextStatus);
-    onVoiceStatusChange?.(nextStatus);
-  }, [onVoiceStatusChange]);
+    onVoiceStatusChangeRef.current?.(nextStatus);
+  }, []);
 
   useEffect(() => {
-    if (!spoken && geminiStatus !== "loading") {
+    if (spoken || geminiStatus === "loading") return;
+    if (voiceStatusRef.current !== "idle") {
       handleVoiceStatus("idle");
     }
   }, [spoken, geminiStatus, handleVoiceStatus]);

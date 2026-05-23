@@ -50,7 +50,7 @@ function recommendationForIssue(issue) {
   }[issue] || "Repeat the session with steady, controlled movement.";
 }
 
-function buildLowFrameRateTrace(packets, targetGapMs = 250, limit = 120) {
+function buildLowFrameRateTrace(packets, targetGapMs = 500, limit = 40) {
   const trace = [];
   let lastAt = -Infinity;
   for (const packet of packets) {

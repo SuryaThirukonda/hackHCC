@@ -1,6 +1,11 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
-// Port 8010 is the clean backend that has all v2 routes (port 8000 has ghost WSL sockets)
-const FALLBACK_API_BASES = ["http://127.0.0.1:8010", "http://localhost:8010", "http://127.0.0.1:8765", "http://localhost:8765", "http://localhost:8001"];
+const FALLBACK_API_BASES = [
+  "http://127.0.0.1:8000",
+  "http://localhost:8000",
+  "http://127.0.0.1:8001",
+  "http://localhost:8001",
+];
+const REQUEST_TIMEOUT_MS = 15000;
 const successfulBaseByBucket = new Map();
 
 function pathBucket(path) {
@@ -12,10 +17,7 @@ function pathBucket(path) {
 
 function candidateBases(path) {
   const bucket = pathBucket(path);
-  const bases = [successfulBaseByBucket.get(bucket), API_BASE].filter(Boolean);
-  if (path.startsWith("/api/analysis/v2") || path.startsWith("/api/recordings/v2") || path.startsWith("/api/presentation/v2")) {
-    bases.push(...FALLBACK_API_BASES);
-  }
+  const bases = [successfulBaseByBucket.get(bucket), API_BASE, ...FALLBACK_API_BASES].filter(Boolean);
   return Array.from(new Set(bases));
 }
 
@@ -37,14 +39,19 @@ export async function request(path, options = {}) {
   let lastError = null;
   for (const base of candidateBases(path)) {
     let response;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       response = await fetch(`${base}${path}`, {
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options
+        ...options,
+        signal: options.signal || controller.signal
       });
     } catch (error) {
       lastError = error;
       continue;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
     if (response.ok) {
       successfulBaseByBucket.set(pathBucket(path), base);

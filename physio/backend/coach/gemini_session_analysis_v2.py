@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from google import genai
-from google.genai.types import GenerateContentConfig, HttpOptions
+from google.genai.types import GenerateContentConfig, HttpOptions, ThinkingConfig
 
 from schemas_session_analysis_v2 import (
     FinalSessionAnalysisPacketV2,
@@ -17,6 +17,8 @@ from schemas_session_analysis_v2 import (
 DEFAULT_PROJECT = "project-f3192730-7603-48b5-a64"
 DEFAULT_LOCATION = "us-central1"
 DEFAULT_MODEL = "gemini-2.5-flash"
+MAX_ANALYSIS_OUTPUT_TOKENS = 8192
+MAX_ANALYSIS_ATTEMPTS = 2
 BANNED_PHRASES = (
     "your arm has a problem",
     "you should train every day",
@@ -52,6 +54,15 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if start == -1 or end == -1 or end <= start:
         raise ValueError("gemini_response_missing_json")
     return json.loads(text[start:end + 1])
+
+
+def analysis_generate_config() -> GenerateContentConfig:
+    return GenerateContentConfig(
+        temperature=0.3,
+        max_output_tokens=MAX_ANALYSIS_OUTPUT_TOKENS,
+        response_mime_type="application/json",
+        thinking_config=ThinkingConfig(thinking_budget=0),
+    )
 
 
 def response_text(response: Any) -> str:
@@ -113,20 +124,39 @@ def local_fallback_analysis(packet: FinalSessionAnalysisPacketV2) -> GeminiSessi
 
 
 def compact_packet_for_gemini(packet: FinalSessionAnalysisPacketV2) -> dict[str, Any]:
+    trace = packet.movement_trace or []
+    max_points = 16
+    if len(trace) > max_points:
+        step = max(1, len(trace) // max_points)
+        trace = trace[::step][:max_points]
+    compact_trace = [
+        {
+            "t_sec": point.t_sec,
+            "angle": point.smoothed_elbow_angle if point.smoothed_elbow_angle is not None else point.raw_elbow_angle,
+            "phase": point.phase,
+            "rep": point.rep_count,
+        }
+        for point in trace
+    ]
     return {
         "exercise_id": packet.exercise_id,
         "exercise_name": packet.exercise_name,
-        "session": packet.session.model_dump(),
+        "session": {
+            "session_id": packet.session.session_id,
+            "duration_sec": packet.session.duration_sec,
+            "side": packet.session.side,
+        },
         "goals": packet.goals.model_dump(),
-        "aggregate_metrics": packet.aggregate_metrics.model_dump(),
-        "tracking_quality": packet.tracking_quality.model_dump(),
+        "aggregate_metrics": packet.aggregate_metrics.model_dump(exclude_none=True),
+        "tracking_quality": {
+            "data_quality": packet.tracking_quality.data_quality,
+            "valid_frame_ratio": packet.tracking_quality.valid_frame_ratio,
+            "average_jitter_score": packet.tracking_quality.average_jitter_score,
+        },
         "trace_summary": packet.trace_summary,
         "issue_summary": packet.issue_summary.model_dump(),
-        "rep_breakdown": [rep.model_dump() for rep in packet.rep_breakdown[:12]],
-        "low_frame_rate_movement_trace": [
-            point.model_dump(exclude_none=True)
-            for point in packet.movement_trace[:80]
-        ],
+        "rep_breakdown": [rep.model_dump(exclude_none=True) for rep in packet.rep_breakdown[:12]],
+        "movement_trace_sample": compact_trace,
         "local_summary": packet.local_summary.model_dump(),
     }
 
@@ -211,22 +241,27 @@ class GeminiSessionAnalysisV2Provider:
             "return for another short practice session when scheduled.' You may add one sentence.\n\n"
 
             "Rules: No diagnosis. No treatment promises. No injury claims. No unscheduled training advice. "
-            "Be warm, specific, and concise. The movement_trace is a low-frame-rate angle trace — "
+            "Be warm, specific, and concise. The movement_trace_sample is a sparse angle trace — "
             "use it only as a secondary check on smoothness and pacing.\n\n"
 
             f"Session data: {json.dumps(safe_packet, sort_keys=True)}"
         )
         try:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=2000,
-                ),
-            )
-            text = response_text(response)
-            parsed = extract_json_object(text)
+            parsed: dict[str, Any] | None = None
+            last_exc: BaseException | None = None
+            for _ in range(MAX_ANALYSIS_ATTEMPTS):
+                try:
+                    response = self._client.models.generate_content(
+                        model=self.model,
+                        contents=prompt,
+                        config=analysis_generate_config(),
+                    )
+                    parsed = extract_json_object(response_text(response))
+                    break
+                except Exception as exc:
+                    last_exc = exc
+            if parsed is None:
+                raise last_exc or ValueError("gemini_response_missing_json")
             analysis = GeminiSessionAnalysisTextV2(
                 spoken_summary=clean_text(parsed.get("spoken_summary"), fallback.spoken_summary, 400),
                 written_summary=clean_text(parsed.get("written_summary"), fallback.written_summary, 900),

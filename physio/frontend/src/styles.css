@@ -2960,7 +2960,7 @@ button:disabled {
   position: sticky;
   top: 0;
   z-index: 20;
-  min-height: 58px;
+  min-height: auto;
   display: grid;
   grid-template-columns: minmax(160px, 1fr) auto minmax(190px, 1fr);
   align-items: center;
@@ -2970,7 +2970,7 @@ button:disabled {
   background: rgba(234, 230, 220, 0.92);
   box-shadow: none;
   backdrop-filter: blur(14px);
-  padding: 0 clamp(1.5rem, 6vw, 5rem);
+  padding: clamp(0.85rem, 2vw, 1.15rem) clamp(1.5rem, 6vw, 5rem) clamp(0.45rem, 1vw, 0.65rem);
 }
 
 .brand-lockup {
@@ -2985,7 +2985,7 @@ button:disabled {
   font-family: var(--font-display);
   font-weight: 400;
   font-size: clamp(2rem, 4vw, 3rem);
-  line-height: 1;
+  line-height: 1.05;
   letter-spacing: -0.04em;
 }
 
@@ -3000,7 +3000,7 @@ button:disabled {
 }
 
 .sidebar-nav button {
-  min-height: 36px;
+  min-height: 32px;
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
@@ -3029,7 +3029,7 @@ button:disabled {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface-2);
-  padding: 8px 14px;
+  padding: 6px 12px;
 }
 
 .sidebar-status strong {
@@ -3597,7 +3597,7 @@ button:disabled {
     position: static;
     grid-template-columns: 1fr;
     justify-items: start;
-    padding-block: 16px;
+    padding: clamp(0.85rem, 2vw, 1.15rem) clamp(1.5rem, 6vw, 5rem) clamp(0.45rem, 1vw, 0.65rem);
   }
 
   .sidebar-nav {
@@ -3832,6 +3832,18 @@ button:disabled {
   margin: 0 0 20px;
   max-width: 680px;
   line-height: 1.5;
+}
+
+.hdetail-replay {
+  margin-bottom: 28px;
+  max-width: 560px;
+}
+
+.hdetail-replay .replay-overlay {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.45);
 }
 
 .hdetail-stat-grid {

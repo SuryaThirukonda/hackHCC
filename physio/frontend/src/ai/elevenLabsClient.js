@@ -1,9 +1,8 @@
-import { API_BASE, generateElevenLabsSpeech } from "../api/client.js";
+import { generateElevenLabsSpeech, resolveApiUrl } from "../api/client.js";
 
 function mediaUrl(path) {
   if (!path) return null;
-  if (path.startsWith("http")) return path;
-  return `${API_BASE}${path}`;
+  return resolveApiUrl(path, "/api/ai/elevenlabs-tts");
 }
 
 export async function speakCoachCue(text) {
