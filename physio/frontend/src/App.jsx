@@ -690,6 +690,11 @@ export default function App() {
       greeting_audio_url: feedback.greeting_audio_url || null
     };
     saveSessionResult(enrichedSummary).catch(() => {});
+    endSession({
+      session_id: summary.session_id,
+      pain_level: feedback.pain_level,
+      fatigue_level: feedback.fatigue_level,
+    }).catch(() => {});
     setLocalSessions((items) => {
       const next = [enrichedSummary, ...items.filter((item) => item.session_id !== enrichedSummary.session_id)].slice(0, 12);
       saveLocalSessionHistory(next);
@@ -1277,6 +1282,7 @@ function ResultsPage({
             summary={featuredPresentation.summary}
             recording={featuredPresentation.recording}
             finalAnalysisPacket={featuredPresentation.finalAnalysisPacket}
+            exercise={selectedExercise}
             geminiError={featuredPresentation.geminiError}
             onVoiceStatusChange={onResultsVoiceStatusChange}
             onCheckInSubmit={onCheckInSubmit}

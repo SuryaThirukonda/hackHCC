@@ -3,30 +3,6 @@ import { ChevronRight } from "lucide-react";
 import SessionSummary from "../SessionSummary.jsx";
 import SessionReplayOverlay from "./SessionReplayOverlay.jsx";
 import ElevenLabsSummaryPlayer from "./ElevenLabsSummaryPlayer.jsx";
-import HeyGenSessionCoach from "./HeyGenSessionCoach.jsx";
-
-// Fallback script when Gemini API is unavailable — jitter-aware based on MediaPipe session data.
-// Used when MediaPipe detected significant jitter (total_jitter_events >= 4 or avg score >= 0.3)
-const MOCK_HEYGEN_SCRIPT_JITTERY =
-  "Good effort on completing your set today! I noticed some shakiness in your movement — that's " +
-  "totally normal, especially if your muscles are fatigued or you're still building strength. " +
-  "A few things that can really help: make sure you do a proper warm-up before your session, " +
-  "focus on slow controlled movement rather than speed, and if the tremors feel uncomfortable " +
-  "or unusual, have a chat with your physio — they'll want to know. Keep at it, you're making progress!";
-
-// Used when movement was clean — low jitter detected
-const MOCK_HEYGEN_SCRIPT_CLEAN =
-  "Nice job on completing the set! Your elbow flexion stayed consistent throughout the session " +
-  "and your movement quality really showed. The MediaPipe tracking picked up solid form across " +
-  "your reps. Keep up this effort and you will see real progress in your recovery. See you at your next session!";
-
-// Picks the right fallback based on MediaPipe jitter data from the session summary
-function pickMockScript(summary) {
-  const jitterEvents = summary?.total_jitter_events ?? 0;
-  const avgJitter = summary?.average_jitter_score ?? 0;
-  const hasSignificantJitter = jitterEvents >= 4 || avgJitter >= 0.3;
-  return hasSignificantJitter ? MOCK_HEYGEN_SCRIPT_JITTERY : MOCK_HEYGEN_SCRIPT_CLEAN;
-}
 
 /**
  * Step 1 — left: local metrics + manual analysis; right: replay graph + AI summary/voice.
@@ -49,9 +25,6 @@ export default function SessionSummaryStep({
   const samples = recording?.samples || [];
   const reps = recording?.reps || summary?.completed_reps || [];
   const loading = geminiStatus === "loading";
-
-  // API result takes priority; fall back to jitter-aware hardcoded script if Gemini is unavailable.
-  const heygenScript = spoken || pickMockScript(summary);
 
   return (
     <section className="session-summary-step">
@@ -123,15 +96,6 @@ export default function SessionSummaryStep({
             )}
           </div>
         </div>
-      </div>
-
-      {/* HeyGen avatar coach video — generates async from MediaPipe + Gemini analysis */}
-      <div className="heygen-coach-section">
-        <HeyGenSessionCoach
-          spokenSummary={heygenScript}
-          sessionId={sessionId}
-          enableGeneratedVideo
-        />
       </div>
 
       {showFlowActions && (

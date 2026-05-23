@@ -2412,6 +2412,17 @@ path.diagram-forearm {
   display: block;
 }
 
+.liveavatar-embed--placeholder,
+.liveavatar-embed iframe {
+  aspect-ratio: 16 / 9;
+  min-height: 220px;
+  background: var(--panel);
+}
+
+.heygen-coach-panel--placeholder {
+  min-height: 260px;
+}
+
 .companion-fallback {
   align-items: center;
   flex-direction: column;
@@ -4147,6 +4158,78 @@ button:disabled {
 
 .patient-checkin-response {
   padding-top: 8px;
+}
+
+.coach-context-brief {
+  border: 1px solid rgba(120, 220, 180, 0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: rgba(120, 220, 180, 0.06);
+}
+
+.coach-context-brief ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.coach-context-brief--pending {
+  border-color: rgba(255, 190, 90, 0.28);
+  background: rgba(255, 190, 90, 0.08);
+}
+
+.coach-context-brief--synced {
+  border-color: rgba(120, 220, 180, 0.35);
+  background: rgba(120, 220, 180, 0.08);
+}
+
+.coach-context-status {
+  margin: 10px 0 0;
+  font-size: 0.86rem;
+}
+
+.coach-context-status--warn {
+  color: #f0c878;
+}
+
+.coach-context-status--ok {
+  color: #8fdcb8;
+}
+
+.coach-context-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.checkin-coach-layout {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.checkin-question-block {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.checkin-question-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.checkin-pain-slider {
+  width: 100%;
+}
+
+.checkin-pain-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .therapist-note-header {

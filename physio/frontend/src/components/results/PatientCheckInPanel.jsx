@@ -1,17 +1,52 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Send } from "lucide-react";
 import { requestElevenLabsSummary } from "../../api/sessionRecordingV2Client.js";
+import { buildCoachSessionContext } from "../../analysis/coach/buildCoachSessionContext.js";
 import {
   FEEDBACK_CHIPS,
   classifyPatientFeedback
 } from "../../analysis/patient/classifyPatientFeedback.js";
-import BlobCoachAvatar from "../coach/BlobCoachAvatar.jsx";
 import VoiceRecordInput from "../voice/VoiceRecordInput.jsx";
+import HeyGenSessionCoach from "./HeyGenSessionCoach.jsx";
 
-const OPENING_MESSAGE = "How did that feel? Did you notice any pain, tightness, or fatigue? Was it easier or harder than last time?";
+const COMPARE_CHIPS = FEEDBACK_CHIPS.filter((chip) =>
+  ["easier_than_last", "harder_than_last", "same_as_last"].includes(chip.id)
+);
+
+function buildCheckInFeedback({ feelText, selectedChip, painLevel, compareChip, coachContext }) {
+  const combinedText = [
+    feelText,
+    Number.isFinite(painLevel) && painLevel > 0 ? `Pain level ${painLevel}/10` : painLevel === 0 ? "No pain" : "",
+    compareChip?.label || "",
+  ].filter(Boolean).join(". ");
+
+  const feedback = classifyPatientFeedback(combinedText, selectedChip || compareChip?.id || null);
+  if (Number.isFinite(painLevel)) {
+    feedback.pain_level = Math.max(feedback.pain_level || 0, painLevel);
+    feedback.sharp_pain = feedback.sharp_pain || painLevel >= 7;
+  }
+  if (compareChip?.id) {
+    if (compareChip.id === "easier_than_last") feedback.difficulty_vs_last = "easier";
+    if (compareChip.id === "harder_than_last") feedback.difficulty_vs_last = "harder";
+    if (compareChip.id === "same_as_last") feedback.difficulty_vs_last = "same";
+  }
+
+  feedback.check_in_answers = {
+    feel: feelText || selectedChip || null,
+    pain_level: Number.isFinite(painLevel) ? painLevel : null,
+    compare: compareChip?.id || null,
+  };
+  feedback.exercise_id = coachContext?.exercise_id || null;
+  feedback.exercise_name = coachContext?.exercise_name || null;
+  feedback.coach_context = coachContext?.brief_lines || [];
+  return feedback;
+}
 
 export default function PatientCheckInPanel({
   sessionId,
+  exercise,
+  summary,
+  geminiAnalysis,
   onSubmit,
   onCoachMessageChange,
   onVoiceStatusChange,
@@ -21,15 +56,27 @@ export default function PatientCheckInPanel({
   initialFeedback = null,
   initialConversation = null,
 }) {
-  const [text, setText] = useState(initialFeedback?.raw_text || "");
+  const coachContext = useMemo(
+    () => buildCoachSessionContext({ exercise, summary, geminiAnalysis, sessionId }),
+    [exercise, summary, geminiAnalysis, sessionId]
+  );
+  const openingMessage = initialConversation?.[0]?.text || coachContext.opening_message;
+
+  const [feelText, setFeelText] = useState(initialFeedback?.check_in_answers?.feel || initialFeedback?.raw_text || "");
   const [selectedChip, setSelectedChip] = useState(initialFeedback?.classification || null);
+  const [painLevel, setPainLevel] = useState(initialFeedback?.check_in_answers?.pain_level ?? initialFeedback?.pain_level ?? 0);
+  const [compareChip, setCompareChip] = useState(
+    COMPARE_CHIPS.find((chip) => chip.id === initialFeedback?.check_in_answers?.compare)
+    || COMPARE_CHIPS.find((chip) => chip.id === initialFeedback?.classification)
+    || null
+  );
   const [voiceStatus, setVoiceStatus] = useState("idle");
   const [speechStatus, setSpeechStatus] = useState({ listening: false, transcribing: false });
   const [coachMessage, setCoachMessage] = useState(
-    initialConversation?.[0]?.text || (initialFeedback ? initialFeedback.response_text : OPENING_MESSAGE)
+    initialFeedback?.response_text || openingMessage
   );
   const [conversation, setConversation] = useState(
-    initialConversation || [{ role: "coach", text: OPENING_MESSAGE }]
+    initialConversation || [{ role: "coach", text: openingMessage }]
   );
   const [submitted, setSubmitted] = useState(Boolean(initialFeedback));
   const audioRef = useRef(null);
@@ -80,10 +127,10 @@ export default function PatientCheckInPanel({
     if (submitted || greetingSpokenRef.current) return undefined;
     greetingSpokenRef.current = true;
     const timer = window.setTimeout(() => {
-      speakWithElevenLabs(OPENING_MESSAGE, "checkin-greeting");
-    }, 600);
+      speakWithElevenLabs(coachContext.spoken_intro, "checkin-greeting");
+    }, 900);
     return () => window.clearTimeout(timer);
-  }, [submitted, speakWithElevenLabs]);
+  }, [submitted, speakWithElevenLabs, coachContext.spoken_intro]);
 
   useEffect(() => () => {
     stopListeningRef.current?.();
@@ -96,12 +143,26 @@ export default function PatientCheckInPanel({
 
   async function handleSubmit(event) {
     event?.preventDefault?.();
-    if (disabled || submitted || speechStatus.transcribing || speechStatus.listening || (!text && !selectedChip)) return;
+    if (disabled || submitted || speechStatus.transcribing || speechStatus.listening) return;
+    if (!feelText && !selectedChip && !compareChip && painLevel === 0) return;
 
     stopListeningRef.current?.();
 
-    const feedback = classifyPatientFeedback(text, selectedChip);
-    const patientMessage = { role: "patient", text: text || selectedChip };
+    const feedback = buildCheckInFeedback({
+      feelText,
+      selectedChip,
+      painLevel,
+      compareChip,
+      coachContext,
+    });
+    const patientMessage = {
+      role: "patient",
+      text: [
+        feelText || selectedChip,
+        `Pain: ${painLevel}/10`,
+        compareChip?.label,
+      ].filter(Boolean).join(" · "),
+    };
     const nextConversation = [...conversation, patientMessage];
     setConversation(nextConversation);
     setSubmitted(true);
@@ -110,7 +171,7 @@ export default function PatientCheckInPanel({
     const coachReply = {
       role: "coach",
       text: feedback.response_text,
-      audio_url: responseAudioUrl
+      audio_url: responseAudioUrl,
     };
     const fullConversation = [...nextConversation, coachReply];
     setConversation(fullConversation);
@@ -120,32 +181,31 @@ export default function PatientCheckInPanel({
       ...feedback,
       check_in_conversation: fullConversation,
       voice_audio_url: responseAudioUrl,
-      greeting_audio_url: conversation[0]?.audio_url || null
+      greeting_audio_url: conversation[0]?.audio_url || null,
     });
   }
 
   const { listening, transcribing, micLevel } = speechStatus;
-  const blobStatus = listening || transcribing
-    ? "thinking"
-    : voiceStatus === "playing"
-      ? "speaking"
-      : voiceStatus === "loading"
-        ? "thinking"
-        : "idle";
 
   return (
     <section className="patient-checkin-panel patient-checkin-conversation">
       <div className="patient-checkin-header">
         <p className="eyebrow">Patient check-in</p>
-        <h2>Talk with your coach</h2>
-        <p className="muted-sub">Share how the session felt. Your coach will listen and respond.</p>
+        <h2>Talk with your coach about {coachContext.exercise_name}</h2>
+        <p className="muted-sub">
+          Your video coach knows what you just practiced. Share how it felt so we can log it for your therapist.
+        </p>
       </div>
 
-      <div className="checkin-coach-stage">
-        <div className="checkin-coach-blob-wrap">
-          <BlobCoachAvatar status={blobStatus} size="lg" />
-        </div>
-        <div className={`checkin-coach-speech${blobStatus === "speaking" ? " checkin-coach-speech--speaking" : ""}`}>
+      <div className="checkin-coach-layout">
+        <HeyGenSessionCoach
+          sessionId={sessionId}
+          exercise={exercise}
+          summary={summary}
+          geminiAnalysis={geminiAnalysis}
+          enableGeneratedVideo={false}
+        />
+        <div className={`checkin-coach-speech${voiceStatus === "playing" ? " checkin-coach-speech--speaking" : ""}`}>
           <p>{coachMessage}</p>
           {listening && (
             <span className="recording-indicator">
@@ -176,44 +236,89 @@ export default function PatientCheckInPanel({
 
       {!submitted ? (
         <form className="patient-checkin-form" onSubmit={handleSubmit}>
-          <div className="feedback-chip-row">
-            {FEEDBACK_CHIPS.map((chip) => (
-              <button
-                key={chip.id}
-                type="button"
-                className={`feedback-chip${selectedChip === chip.id ? " active" : ""}`}
-                onClick={() => {
-                  setSelectedChip(chip.id);
-                  if (!text) setText(chip.label);
-                }}
-              >
-                {chip.label}
-              </button>
-            ))}
+          <div className="checkin-question-block">
+            <label className="checkin-question-label">How did this session feel?</label>
+            <div className="feedback-chip-row">
+              {FEEDBACK_CHIPS.filter((chip) => !["easier_than_last", "harder_than_last", "same_as_last"].includes(chip.id)).map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className={`feedback-chip${selectedChip === chip.id ? " active" : ""}`}
+                  onClick={() => {
+                    setSelectedChip(chip.id);
+                    if (!feelText) setFeelText(chip.label);
+                  }}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+            <VoiceRecordInput
+              value={feelText}
+              onChange={setFeelText}
+              placeholder="Tell your coach how that felt, or tap Record and speak…"
+              rows={3}
+              disabled={disabled}
+              onBeforeRecord={stopCoachAudio}
+              onStatusChange={setSpeechStatus}
+              stopRef={stopListeningRef}
+              showMicMeter
+              recordLabel="Record"
+              stopLabel="Stop recording"
+            />
           </div>
 
-          <VoiceRecordInput
-            value={text}
-            onChange={setText}
-            placeholder="Tell your coach how that felt, or tap Record and speak…"
-            rows={3}
-            disabled={disabled}
-            onBeforeRecord={stopCoachAudio}
-            onStatusChange={setSpeechStatus}
-            stopRef={stopListeningRef}
-            showMicMeter
-            recordLabel="Record"
-            stopLabel="Stop recording"
-          />
+          <div className="checkin-question-block">
+            <label className="checkin-question-label" htmlFor="checkin-pain">
+              Any pain during or after the exercise? ({painLevel}/10)
+            </label>
+            <input
+              id="checkin-pain"
+              className="checkin-pain-slider"
+              type="range"
+              min="0"
+              max="10"
+              step="1"
+              value={painLevel}
+              onChange={(event) => setPainLevel(Number(event.target.value))}
+              disabled={disabled}
+            />
+            <div className="checkin-pain-labels">
+              <span>None</span>
+              <span>Mild</span>
+              <span>Severe</span>
+            </div>
+          </div>
+
+          <div className="checkin-question-block">
+            <span className="checkin-question-label">Compared to your last session</span>
+            <div className="feedback-chip-row">
+              {COMPARE_CHIPS.map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className={`feedback-chip${compareChip?.id === chip.id ? " active" : ""}`}
+                  onClick={() => setCompareChip(chip)}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="patient-checkin-actions">
             <button
               type="submit"
               className="primary-btn"
-              disabled={disabled || speechStatus.transcribing || speechStatus.listening || (!text && !selectedChip)}
+              disabled={
+                disabled
+                || speechStatus.transcribing
+                || speechStatus.listening
+                || (!feelText && !selectedChip && !compareChip && painLevel === 0)
+              }
             >
               <Send size={16} />
-              Send
+              Save check-in
             </button>
           </div>
         </form>

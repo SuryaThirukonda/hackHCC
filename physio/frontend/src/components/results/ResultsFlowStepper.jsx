@@ -17,6 +17,7 @@ export default function ResultsFlowStepper({
   summary,
   recording,
   finalAnalysisPacket,
+  exercise,
   geminiError,
   onVoiceStatusChange,
   onCheckInSubmit,
@@ -106,6 +107,9 @@ export default function ResultsFlowStepper({
       {step === "checkin" && (
         <PatientCheckInPanel
           sessionId={sessionId}
+          exercise={exercise}
+          summary={summary}
+          geminiAnalysis={geminiResult}
           onSubmit={onCheckInSubmit}
           onCoachMessageChange={onCheckInCoachMessage}
           onVoiceStatusChange={onCheckInVoiceStatusChange}

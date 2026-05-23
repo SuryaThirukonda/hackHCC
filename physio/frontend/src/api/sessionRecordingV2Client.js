@@ -67,13 +67,23 @@ export async function requestElevenLabsSummary(text, sessionId) {
   }
 }
 
-export async function requestHeyGenCoach(spokenSummary, audioUrl, sessionId) {
+export async function requestHeyGenCoach({
+  spokenSummary = "",
+  audioUrl = null,
+  sessionId = null,
+  exercise = null,
+  summary = null,
+  geminiAnalysis = null,
+} = {}) {
   return request("/api/presentation/v2/heygen-session-coach", {
     method: "POST",
     body: JSON.stringify({
       spoken_summary: spokenSummary,
       audio_url: audioUrl || null,
       session_id: sessionId,
+      exercise,
+      summary,
+      gemini_analysis: geminiAnalysis,
     })
   });
 }

@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 from coach.http_errors import env_secret, provider_http_error
+from env_loader import ensure_env_loaded
 
 # HeyGen video status poll endpoint (v1 status API)
 _HEYGEN_STATUS_URL = "https://api.heygen.com/v1/video_status.get"
@@ -151,6 +152,7 @@ class HeyGenAvatarProvider:
 
 
 def get_avatar_provider() -> MockAvatarProvider | HeyGenAvatarProvider:
+    ensure_env_loaded()
     provider = os.getenv("AVATAR_PROVIDER", "mock").lower()
     if provider == "heygen":
         return HeyGenAvatarProvider()

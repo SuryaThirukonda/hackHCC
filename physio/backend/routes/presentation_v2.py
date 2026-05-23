@@ -5,9 +5,13 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from env_loader import ensure_env_loaded
+
 from coach.avatar_provider import HeyGenAvatarProvider, get_avatar_provider
 from coach.base import clean_coach_text, clean_spoken_summary_text
+from coach.coach_context_builder import build_coach_session_context
 from coach.gemini_coach import GeminiCoachProvider
+from coach.liveavatar_provider import create_session_embed
 from coach.voice_provider import get_voice_provider
 
 router = APIRouter(prefix="/api/presentation/v2", tags=["presentation-v2"])
@@ -15,6 +19,7 @@ router = APIRouter(prefix="/api/presentation/v2", tags=["presentation-v2"])
 
 @router.get("/status")
 def presentation_status() -> dict[str, Any]:
+    ensure_env_loaded()
     gem_status = GeminiCoachProvider.debug_status()
     avatar_provider_name = os.getenv("AVATAR_PROVIDER", "mock").lower()
     voice_provider_name = os.getenv("VOICE_PROVIDER", "mock").lower()
@@ -50,21 +55,49 @@ def elevenlabs_summary(payload: dict[str, Any]) -> dict[str, Any]:
 @router.post("/heygen-session-coach")
 def heygen_session_coach(payload: dict[str, Any]) -> dict[str, Any]:
     """Request a HeyGen video or return LiveAvatar embed for the session summary."""
-    text = clean_coach_text(str((payload or {}).get("spoken_summary") or ""), "")
-    audio_url = str((payload or {}).get("audio_url") or "") or None
-    embed_html = os.getenv("EMBED", "").strip()
+    ensure_env_loaded()
+    body = payload or {}
+    text = clean_coach_text(str(body.get("spoken_summary") or ""), "")
+    audio_url = str(body.get("audio_url") or "") or None
+    session_id = str(body.get("session_id") or "") or None
+    coach_context = build_coach_session_context(
+        exercise=body.get("exercise") if isinstance(body.get("exercise"), dict) else None,
+        summary=body.get("summary") if isinstance(body.get("summary"), dict) else None,
+        gemini_analysis=body.get("gemini_analysis") if isinstance(body.get("gemini_analysis"), dict) else None,
+        session_id=session_id,
+    )
+    embed_result = create_session_embed(coach_context)
+    embed_html = str(embed_result.get("embed_html") or "").strip()
 
     embed_response = {
         "embed_available": bool(embed_html),
         "embed_html": embed_html or None,
+        "coach_context": coach_context,
+        "context_applied": bool(embed_result.get("context_applied")),
+        "context_sync_reason": embed_result.get("context_sync_reason"),
+        "embed_mount_key": embed_result.get("embed_mount_key"),
+        "liveavatar_configured": embed_result.get("liveavatar_configured"),
+        "setup_hint": embed_result.get("setup_hint"),
     }
+
+    # LiveAvatar embed is interactive — prefer it when configured and skip async HeyGen render.
+    if embed_html:
+        return {
+            "ok": True,
+            "status": "embed_ready",
+            "video_url": None,
+            "avatar_session_id": None,
+            "generate_time_ms": None,
+            "error_message_sanitized": embed_result.get("error_message_sanitized"),
+            **embed_response,
+        }
 
     if not text:
         return {
             "ok": True,
-            "status": "embed_only",
+            "status": "empty_text",
             "video_url": None,
-            "error_message_sanitized": None,
+            "error_message_sanitized": "No spoken summary provided",
             **embed_response,
         }
 
@@ -89,6 +122,7 @@ def heygen_video_status(video_id: str) -> dict[str, Any]:
     Frontend calls this every ~5s until status is 'completed' or 'failed'.
     HeyGen statuses: pending | processing | completed | failed
     """
+    ensure_env_loaded()
     avatar = get_avatar_provider()
     if not isinstance(avatar, HeyGenAvatarProvider):
         return {

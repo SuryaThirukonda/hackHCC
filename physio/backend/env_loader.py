@@ -20,6 +20,11 @@ def load_env_file(path: Path | None = None, override: bool = True) -> None:
             os.environ[key] = value
 
 
+def ensure_env_loaded() -> None:
+    """Reload physio/.env so provider toggles apply without a manual server restart."""
+    load_env_file()
+
+
 def configured_secret(name: str) -> bool:
     value = os.getenv(name, "").strip()
     lowered = value.lower()
