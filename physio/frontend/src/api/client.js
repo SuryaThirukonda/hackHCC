@@ -216,6 +216,21 @@ export function getSessionResults() {
   return request("/api/session/results");
 }
 
+export function savePresentationCache(payload) {
+  return request("/api/session/presentation-cache", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getPresentationCache(sessionId) {
+  return request(`/api/session/presentation-cache/${encodeURIComponent(sessionId)}`);
+}
+
+export function listPresentationCaches() {
+  return request("/api/session/presentation-caches");
+}
+
 export function getSessions() {
   return request("/api/sessions");
 }

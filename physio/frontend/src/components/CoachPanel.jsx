@@ -1,4 +1,4 @@
-import { Bot, Radio, Volume2, VolumeX } from "lucide-react";
+import { Radio, Volume2, VolumeX } from "lucide-react";
 
 function sourceLabel(source) {
   if (source === "phase_cue") return "phase cue";
@@ -24,18 +24,7 @@ export default function CoachPanel({
   const cueSource = aiCue?.source || "local_fallback";
 
   return (
-    <section className="coach-panel">
-      <div className="avatar-frame">
-        <div className="avatar-orbit">
-          <Bot size={58} strokeWidth={1.7} />
-        </div>
-        <div className="avatar-lines">
-          <span />
-          <span />
-          <span />
-        </div>
-      </div>
-
+    <section className="coach-panel coach-panel--compact">
       <div className="coach-copy">
         <p className="eyebrow">Coach cue</p>
         <h2>{message}</h2>
@@ -52,7 +41,7 @@ export default function CoachPanel({
           <span><Radio size={15} /> {sourceLabel(cueSource)}</span>
           <span><Volume2 size={15} /> {voiceStatus || "idle"}</span>
           <span>{cue?.avatar_status || "disabled"} avatar</span>
-          <span>follow your therapist's plan</span>
+          <span>follow your therapist&apos;s plan</span>
         </div>
         <div className="coach-toggle-row">
           <button type="button" onClick={onToggleVoiceEnabled}>

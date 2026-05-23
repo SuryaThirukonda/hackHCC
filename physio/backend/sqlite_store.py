@@ -75,6 +75,50 @@ class SQLiteSessionStore:
                 (session_id, int(time.time() * 1000), result_json),
             )
 
+    def save_presentation_cache(self, session_id: str, payload: dict) -> dict:
+        existing = self.get_presentation_cache(session_id) or {}
+        merged = {**existing, **payload, "session_id": session_id}
+        merged["updated_at_ms"] = int(time.time() * 1000)
+        cache_json = json.dumps(merged)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO session_presentation_cache (session_id, updated_at_ms, cache_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    updated_at_ms=excluded.updated_at_ms,
+                    cache_json=excluded.cache_json
+                """,
+                (session_id, merged["updated_at_ms"], cache_json),
+            )
+        return merged
+
+    def get_presentation_cache(self, session_id: str) -> dict | None:
+        with sqlite3.connect(self.db_path) as connection:
+            row = connection.execute(
+                "SELECT cache_json FROM session_presentation_cache WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    def list_presentation_caches(self) -> list[dict]:
+        with sqlite3.connect(self.db_path) as connection:
+            rows = connection.execute(
+                "SELECT cache_json FROM session_presentation_cache ORDER BY updated_at_ms DESC"
+            ).fetchall()
+        caches: list[dict] = []
+        for (cache_json,) in rows:
+            try:
+                caches.append(json.loads(cache_json))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return caches
+
     def list_session_results(self) -> list[dict]:
         with sqlite3.connect(self.db_path) as connection:
             rows = connection.execute(
@@ -108,6 +152,9 @@ class SQLiteSessionStore:
             packets = connection.execute("SELECT COUNT(*) FROM packets").fetchone()[0]
             summaries = connection.execute("SELECT COUNT(*) FROM session_summaries").fetchone()[0]
             results = connection.execute("SELECT COUNT(*) FROM session_results").fetchone()[0]
+            presentation_caches = connection.execute(
+                "SELECT COUNT(*) FROM session_presentation_cache"
+            ).fetchone()[0]
         return {
             "provider": "sqlite",
             "db_path": str(self.db_path),
@@ -115,6 +162,7 @@ class SQLiteSessionStore:
             "packets": packets,
             "summaries": summaries,
             "results": results,
+            "presentation_caches": presentation_caches,
         }
 
     def _init_db(self) -> None:
@@ -146,6 +194,15 @@ class SQLiteSessionStore:
                     session_id TEXT PRIMARY KEY,
                     saved_at_ms INTEGER NOT NULL,
                     result_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_presentation_cache (
+                    session_id TEXT PRIMARY KEY,
+                    updated_at_ms INTEGER NOT NULL,
+                    cache_json TEXT NOT NULL
                 )
                 """
             )

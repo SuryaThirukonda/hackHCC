@@ -23,6 +23,8 @@ import {
   getLiveSource,
   getSessionResults,
   getSessions,
+  listPresentationCaches,
+  savePresentationCache,
   saveSessionResult,
   startSession
 } from "./api/client.js";
@@ -36,6 +38,7 @@ import {
 } from "./ai/coachVoiceScript.js";
 import { speakCoachCue } from "./ai/elevenLabsClient.js";
 import CoachPanel from "./components/CoachPanel.jsx";
+import BlobCoachCompanion from "./components/coach/BlobCoachCompanion.jsx";
 import CountdownOverlay from "./components/CountdownOverlay.jsx";
 import ExercisePreview from "./components/ExercisePreview.jsx";
 import LiveSession from "./components/LiveSession.jsx";
@@ -88,6 +91,7 @@ export default function App() {
   const [cue, setCue] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [sessionResults, setSessionResults] = useState([]);
+  const [presentationCaches, setPresentationCaches] = useState({});
   const [localSessions, setLocalSessions] = useState(() => loadLocalSessionHistory());
   const [summary, setSummary] = useState(null);
   const [sessionId, setSessionId] = useState(null);
@@ -127,6 +131,8 @@ export default function App() {
   const [voiceMuted, setVoiceMuted] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("idle");
   const [voiceError, setVoiceError] = useState("");
+  const [resultsVoiceStatus, setResultsVoiceStatus] = useState("idle");
+  const [blobMinimized, setBlobMinimized] = useState(false);
   const [bonusRepRequested, setBonusRepRequested] = useState(false);
   const voiceThrottleRef = useRef({ lastSpeakAt: 0, lastText: "", lastPhase: "" });
   const audioRef = useRef(null);
@@ -156,6 +162,7 @@ export default function App() {
   // Reload session data from DB whenever user switches to the results tab
   useEffect(() => {
     if (activeTab === "results") refreshSessions();
+    if (activeTab !== "results") setResultsVoiceStatus("idle");
   }, [activeTab]);
 
   useEffect(() => {
@@ -361,14 +368,91 @@ export default function App() {
     return resolveOverlayCoachMessage({ aiCue, packet, analyzerOutput });
   }, [aiCue, packet, runner.latestAnalyzerOutput]);
 
+  const blobCoachMessage = useMemo(() => {
+    if (activeTab === "results") {
+      const cached = summary?.session_id ? presentationCaches[summary.session_id] : null;
+      const cachedAnalysis = cached?.gemini_result?.analysis;
+      const written = geminiSessionAnalysis?.analysis?.written_summary || cachedAnalysis?.written_summary || "";
+      const spoken = geminiSessionAnalysis?.analysis?.spoken_summary || cachedAnalysis?.spoken_summary || "";
+      if (written || spoken) return written || spoken;
+      if (geminiSessionStatus === "loading") return "Preparing your AI summary…";
+      if (summary?.recommendation_text) return summary.recommendation_text;
+      if (cached?.summary?.recommendation_text) return cached.summary.recommendation_text;
+      if (!summary) {
+        const latestCache = Object.values(presentationCaches)[0];
+        const latestAnalysis = latestCache?.gemini_result?.analysis;
+        if (latestAnalysis?.written_summary || latestAnalysis?.spoken_summary) {
+          return latestAnalysis.written_summary || latestAnalysis.spoken_summary;
+        }
+        if (latestCache?.summary?.recommendation_text) return latestCache.summary.recommendation_text;
+      }
+      return "Complete a session to see your coach summary.";
+    }
+    if (runner.status === RUNNER_STATES.COUNTDOWN) return "Get ready…";
+    if (runner.status === RUNNER_STATES.ACTIVE) {
+      return overlayCoachMessage || aiCue?.text || packet?.local_coach_message || "Follow the movement cues.";
+    }
+    if (activeTab === "live") return "Select an exercise and start your session.";
+    if (activeTab === "exercises") {
+      return showExerciseDetail
+        ? "Review the setup, then begin when you're ready."
+        : "Choose an exercise to begin.";
+    }
+    return "Your coach is here when you need guidance.";
+  }, [
+    activeTab,
+    runner.status,
+    overlayCoachMessage,
+    aiCue,
+    packet,
+    geminiSessionAnalysis,
+    geminiSessionStatus,
+    summary,
+    showExerciseDetail,
+    presentationCaches
+  ]);
+
+  const blobCoachStatus = useMemo(() => {
+    if (activeTab === "results") {
+      if (resultsVoiceStatus === "playing") return "speaking";
+      if (resultsVoiceStatus === "loading" || geminiSessionStatus === "loading") return "thinking";
+      return "idle";
+    }
+    if (voiceStatus === "playing") return "speaking";
+    if (voiceStatus === "loading") return "thinking";
+    if (runner.status === RUNNER_STATES.COUNTDOWN) return "thinking";
+    return "idle";
+  }, [activeTab, voiceStatus, resultsVoiceStatus, geminiSessionStatus, runner.status]);
+
   async function refreshSessions() {
-    // Fetch both; let each fail independently so a 404 from one doesn't kill both
-    const [basicResult, richResult] = await Promise.allSettled([
+    const [basicResult, richResult, cacheResult] = await Promise.allSettled([
       getSessions(),
-      getSessionResults()
+      getSessionResults(),
+      listPresentationCaches()
     ]);
     if (basicResult.status === "fulfilled") setSessions(basicResult.value);
     if (richResult.status === "fulfilled") setSessionResults(richResult.value);
+    if (cacheResult.status === "fulfilled") {
+      const map = {};
+      for (const item of cacheResult.value || []) {
+        if (item?.session_id) map[item.session_id] = item;
+      }
+      setPresentationCaches(map);
+    }
+  }
+
+  async function persistPresentationCache(activeSessionId, partial) {
+    if (!activeSessionId) return;
+    try {
+      const response = await savePresentationCache({ session_id: activeSessionId, ...partial });
+      const cache = response?.cache || { session_id: activeSessionId, ...partial };
+      setPresentationCaches((prev) => ({
+        ...prev,
+        [activeSessionId]: { ...prev[activeSessionId], ...cache }
+      }));
+    } catch {
+      // Non-fatal — results UI can still use in-memory state.
+    }
   }
 
   async function beginExercise() {
@@ -444,6 +528,10 @@ export default function App() {
     });
     setFinalAnalysisPacket(finalPacket);
     setLatestAiPacket(finalPacket);
+    persistPresentationCache(activeSession, {
+      summary: localSummary,
+      final_analysis_packet: finalPacket
+    });
     setGeminiSessionAnalysis(null);
     setGeminiSessionStatus("loading");
     setGeminiSessionError("");
@@ -463,6 +551,14 @@ export default function App() {
         setAiHealthReport(result.analysis?.focus_next_time || "");
         setGeminiSessionError(result.error_message_sanitized || "");
         setGeminiAnalysisCache(cacheEntry);
+        persistPresentationCache(activeSession, {
+          summary: localSummary,
+          final_analysis_packet: finalPacket,
+          gemini_result: result,
+          gemini_status: status,
+          gemini_error: result.error_message_sanitized || "",
+          gemini_cache: cacheEntry
+        });
       })
       .catch((err) => {
         const cacheEntry = saveGeminiSessionAnalysisCache({
@@ -478,10 +574,21 @@ export default function App() {
         setAiHealthReport("");
         setAiCue((current) => ({ ...current, error: err.message }));
         setGeminiAnalysisCache(cacheEntry);
+        persistPresentationCache(activeSession, {
+          summary: localSummary,
+          final_analysis_packet: finalPacket,
+          gemini_result: null,
+          gemini_status: "error",
+          gemini_error: err.message,
+          gemini_cache: cacheEntry
+        });
       });
     recorder.stopAndSave()
       .then((recording) => {
-        if (recording) setSessionRecording(recording);
+        if (recording) {
+          setSessionRecording(recording);
+          persistPresentationCache(activeSession, { recording });
+        }
       })
       .catch(() => {});
     try {
@@ -646,7 +753,9 @@ export default function App() {
             sessionId={sessionLabel}
             sessionResults={sessionResults}
             sessions={sessions}
+            presentationCaches={presentationCaches}
             onRefresh={refreshSessions}
+            onResultsVoiceStatusChange={setResultsVoiceStatus}
           />
         )}
 
@@ -681,6 +790,13 @@ export default function App() {
         )}
         <footer className="footer-wordmark" aria-hidden="true">physio</footer>
       </section>
+
+      <BlobCoachCompanion
+        message={blobCoachMessage}
+        status={blobCoachStatus}
+        minimized={blobMinimized}
+        onToggleMinimize={() => setBlobMinimized((value) => !value)}
+      />
     </main>
   );
 }
@@ -734,6 +850,49 @@ function saveGeminiSessionAnalysisCache({ sessionId, packet, result, status, err
     // Cache is only for demo visibility; the UI should keep working without localStorage.
   }
   return entry;
+}
+
+function resolveFeaturedPresentation({
+  featuredSession,
+  summary,
+  presentationCaches,
+  geminiSessionAnalysis,
+  geminiSessionStatus,
+  geminiSessionError,
+  geminiAnalysisCache,
+  sessionRecording,
+  finalAnalysisPacket
+}) {
+  if (!featuredSession) return null;
+
+  const isLive = summary?.session_id === featuredSession.session_id;
+  const cache = presentationCaches?.[featuredSession.session_id];
+
+  if (isLive) {
+    return {
+      sessionId: featuredSession.session_id,
+      summary: featuredSession,
+      geminiResult: geminiSessionAnalysis,
+      geminiStatus: geminiSessionStatus,
+      geminiError: geminiSessionError,
+      geminiCache: geminiAnalysisCache,
+      recording: sessionRecording,
+      finalAnalysisPacket
+    };
+  }
+
+  if (!cache) return null;
+
+  return {
+    sessionId: featuredSession.session_id,
+    summary: cache.summary || featuredSession,
+    geminiResult: cache.gemini_result || null,
+    geminiStatus: cache.gemini_status || (cache.gemini_result ? "ready" : "idle"),
+    geminiError: cache.gemini_error || "",
+    geminiCache: cache.gemini_cache || null,
+    recording: cache.recording || null,
+    finalAnalysisPacket: cache.final_analysis_packet || null
+  };
 }
 
 function ExercisesPage({ exercises: exerciseList, onStart }) {
@@ -927,22 +1086,32 @@ function ResultsPage({
   sessionId,
   sessionResults,
   sessions,
-  onRefresh
+  presentationCaches,
+  onRefresh,
+  onResultsVoiceStatusChange
 }) {
   const [expandedId, setExpandedId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // sessionResults has full per-rep data; fall back to basic sessions if empty
   const dbRows = sessionResults.length > 0 ? sessionResults : sessions;
 
-  // The just-completed session always goes first if present; otherwise use DB order
   const allResults = summary
     ? [summary, ...dbRows.filter((r) => r.session_id !== summary.session_id)]
     : dbRows;
 
   const featuredSession = allResults[0] || null;
   const historyRows = allResults.slice(1);
-  const embedHtml = presentationStatus?.liveavatar_embed_html || null;
+  const featuredPresentation = resolveFeaturedPresentation({
+    featuredSession,
+    summary,
+    presentationCaches,
+    geminiSessionAnalysis,
+    geminiSessionStatus,
+    geminiSessionError,
+    geminiAnalysisCache,
+    sessionRecording,
+    finalAnalysisPacket
+  });
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -977,24 +1146,29 @@ function ResultsPage({
         </section>
       ) : (
         <>
-          {featuredSession.session_id === summary?.session_id && (
+          {featuredPresentation && (
             <ResultsPresentationPanel
-              geminiResult={geminiSessionAnalysis}
-              geminiStatus={geminiSessionStatus}
-              sessionId={sessionId}
-              summary={featuredSession}
-              recording={sessionRecording}
-              presentationStatus={presentationStatus}
-              embedHtml={embedHtml}
-              finalAnalysisPacket={finalAnalysisPacket}
-              geminiError={geminiSessionError}
-              geminiCache={geminiAnalysisCache}
+              geminiResult={featuredPresentation.geminiResult}
+              geminiStatus={featuredPresentation.geminiStatus}
+              sessionId={featuredPresentation.sessionId}
+              summary={featuredPresentation.summary}
+              recording={featuredPresentation.recording}
+              finalAnalysisPacket={featuredPresentation.finalAnalysisPacket}
+              geminiError={featuredPresentation.geminiError}
+              geminiCache={featuredPresentation.geminiCache}
+              onVoiceStatusChange={onResultsVoiceStatusChange}
             />
           )}
           <SessionSummary
             summary={featuredSession}
-            aiSummaryText={featuredSession.session_id === summary?.session_id ? aiSummaryText : ""}
-            aiHealthReport={featuredSession.session_id === summary?.session_id ? aiHealthReport : ""}
+            aiSummaryText={
+              featuredPresentation?.geminiResult?.analysis?.written_summary
+              || (featuredSession.session_id === summary?.session_id ? aiSummaryText : "")
+            }
+            aiHealthReport={
+              featuredPresentation?.geminiResult?.analysis?.focus_next_time
+              || (featuredSession.session_id === summary?.session_id ? aiHealthReport : "")
+            }
           />
 
           {historyRows.length > 0 && (

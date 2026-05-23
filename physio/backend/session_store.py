@@ -34,6 +34,36 @@ class LocalSessionStore:
                 continue
         return results
 
+    def save_presentation_cache(self, session_id: str, payload: dict) -> dict:
+        path = self.base_dir / f"{session_id}.presentation.json"
+        existing: dict = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                existing = {}
+        merged = {**existing, **payload, "session_id": session_id}
+        path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        return merged
+
+    def get_presentation_cache(self, session_id: str) -> dict | None:
+        path = self.base_dir / f"{session_id}.presentation.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    def list_presentation_caches(self) -> list[dict]:
+        caches: list[dict] = []
+        for path in sorted(self.base_dir.glob("*.presentation.json"), reverse=True):
+            try:
+                caches.append(json.loads(path.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return caches
+
     def list_summaries(self) -> list[SessionSummary]:
         summaries: list[SessionSummary] = []
         for path in sorted(self.base_dir.glob("*.json"), reverse=True):

@@ -7,23 +7,19 @@ import SessionReplayOverlay from "./SessionReplayOverlay.jsx";
  * ResultsPresentationPanel
  *
  * Layout:
- *   Top row: [ Coach companion / HeyGen / speech bubble ] | [ Movement replay ]
+ *   Top row: [ Blob coach + Gemini text + voice ] | [ Movement replay ]
  *   Bottom:  Gemini structured analysis + metrics
  */
 export default function ResultsPresentationPanel({
-  // Gemini
   geminiResult,
   geminiStatus,
-  // Session info
   sessionId,
   summary,
-  // Recording data
   recording,
-  presentationStatus,
-  // Presentation config
-  embedHtml,
   finalAnalysisPacket,
   geminiCache,
+  geminiError,
+  onVoiceStatusChange,
 }) {
   const analysis = geminiResult?.analysis;
   const samples = recording?.samples || [];
@@ -33,24 +29,20 @@ export default function ResultsPresentationPanel({
   return (
     <div className="results-presentation-panel">
       <div className="results-top-row">
-        {/* Left: Coach companion + voice */}
         <div className="results-left">
           <ResultsCoachCompanion
             geminiAnalysis={analysis}
             sessionId={sessionId}
-            embedHtml={embedHtml}
             geminiStatus={geminiStatus}
-            heygenConfigured={Boolean(presentationStatus?.heygen_configured)}
+            onVoiceStatusChange={onVoiceStatusChange}
           />
         </div>
 
-        {/* Right: Replay overlay */}
         <div className="results-right">
           <SessionReplayOverlay samples={samples} reps={reps} />
         </div>
       </div>
 
-      {/* Structured analysis */}
       <div className="results-bottom-row">
         <GeminiSessionAnalysisPanel
           packet={finalAnalysisPacket || geminiCache?.packet}
@@ -58,9 +50,9 @@ export default function ResultsPresentationPanel({
           status={geminiStatus}
           localRecommendation={localRecommendation}
           cachedResult={geminiCache}
+          error={geminiError}
         />
 
-        {/* Quick metrics strip */}
         {summary && (
           <div className="metrics-strip">
             {[

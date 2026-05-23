@@ -1,86 +1,99 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import ElevenLabsSummaryPlayer from "./ElevenLabsSummaryPlayer.jsx";
-import HeyGenSessionCoach from "./HeyGenSessionCoach.jsx";
 
 /**
- * ResultsCoachCompanion
- *
- * Left column of the results panel:
- *   - HeyGen coach (LiveAvatar embed or video)
- *   - Speech bubble with Gemini summary text
- *   - ElevenLabs audio player
+ * Results coach panel — Gemini text + ElevenLabs voice.
+ * The blob avatar lives in the global floating companion.
  */
 export default function ResultsCoachCompanion({
   geminiAnalysis,
   sessionId,
-  embedHtml,
   geminiStatus,
-  heygenConfigured = false,
+  onVoiceStatusChange,
 }) {
-  const [audioUrl, setAudioUrl] = useState(null);
   const [voiceStatus, setVoiceStatus] = useState("idle");
   const [speechProgress, setSpeechProgress] = useState(0);
 
   const spoken = geminiAnalysis?.spoken_summary || "";
   const written = geminiAnalysis?.written_summary || "";
-  const displayText = spoken || written;
-  const coachText = useMemo(() => {
-    if (voiceStatus !== "playing" || !displayText) return displayText;
-    return revealTextByProgress(displayText, speechProgress);
-  }, [displayText, speechProgress, voiceStatus]);
-  const hasContent = Boolean(displayText);
+  const displayText = written || spoken;
 
-  const handlePlaybackStart = useCallback(() => {
-    setSpeechProgress(0);
-  }, []);
+  const handleVoiceStatus = useCallback((nextStatus) => {
+    setVoiceStatus(nextStatus);
+    onVoiceStatusChange?.(nextStatus);
+  }, [onVoiceStatusChange]);
 
-  const handlePlaybackProgress = useCallback((progress) => {
-    setSpeechProgress(progress);
-  }, []);
+  useEffect(() => {
+    if (!spoken && geminiStatus !== "loading") {
+      handleVoiceStatus("idle");
+    }
+  }, [spoken, geminiStatus, handleVoiceStatus]);
 
-  const handlePlaybackEnd = useCallback(() => {
-    setSpeechProgress(1);
-  }, []);
+  const handlePlaybackStart = useCallback(() => setSpeechProgress(0), []);
+  const handlePlaybackProgress = useCallback((progress) => setSpeechProgress(progress), []);
+  const handlePlaybackEnd = useCallback(() => setSpeechProgress(1), []);
+
+  const coachText = voiceStatus === "playing" && displayText
+    ? revealTextByProgress(displayText, speechProgress)
+    : displayText;
+
+  const statusLabel = {
+    idle: null,
+    loading: "Preparing voice…",
+    playing: "Speaking",
+    ready: "Voice ready",
+    blocked: "Tap play to hear summary",
+    error: "Voice unavailable",
+  }[voiceStatus];
 
   return (
-    <div className="coach-companion">
-      <HeyGenSessionCoach
-        spokenSummary={spoken}
-        audioUrl={audioUrl}
-        sessionId={sessionId}
-        embedHtml={embedHtml}
-        enableGeneratedVideo={heygenConfigured}
-      />
+    <div className="coach-blob-panel coach-blob-panel--text-only">
+      <div className="coach-blob-header">
+        <span className="coach-section-label">Session summary</span>
+        {statusLabel && spoken && (
+          <span className={`coach-blob-status coach-blob-status--${voiceStatus}`}>
+            {voiceStatus === "playing" && <span className="voice-dot" />}
+            {statusLabel}
+          </span>
+        )}
+        {geminiStatus === "loading" && !displayText && (
+          <span className="coach-blob-status coach-blob-status--thinking">
+            <span className="spinner-xs" /> Analyzing session…
+          </span>
+        )}
+      </div>
 
-      {hasContent && (
-        <div className={`speech-bubble ${voiceStatus === "playing" ? "speech-bubble--speaking" : ""}`}>
-          <p>{coachText}</p>
+      <div className="coach-blob-body coach-blob-body--text-only">
+        <div
+          className={`coach-blob-speech${
+            voiceStatus === "playing" ? " coach-blob-speech--speaking" : ""
+          }${!displayText ? " coach-blob-speech--empty" : ""}`}
+        >
+          {displayText ? (
+            <p>
+              {coachText}
+              {voiceStatus === "playing" && speechProgress < 0.99 ? " ▌" : ""}
+            </p>
+          ) : geminiStatus === "loading" ? (
+            <p className="muted">
+              <span className="spinner-xs" /> Preparing your AI summary…
+            </p>
+          ) : (
+            <p className="muted">Your workout summary will appear here after analysis.</p>
+          )}
         </div>
-      )}
-
-      {!hasContent && geminiStatus === "loading" && (
-        <div className="speech-bubble speech-bubble--loading">
-          <span className="spinner" />
-          <span className="muted"> Preparing your summary…</span>
-        </div>
-      )}
-
-      {!hasContent && geminiStatus === "idle" && (
-        <div className="speech-bubble speech-bubble--idle">
-          <span className="muted">Your analysis will appear here after your session.</span>
-        </div>
-      )}
+      </div>
 
       {spoken && (
         <ElevenLabsSummaryPlayer
           spokenSummary={spoken}
           sessionId={sessionId}
           autoPlay
-          onAudioUrl={setAudioUrl}
-          onStatusChange={setVoiceStatus}
+          onStatusChange={handleVoiceStatus}
           onPlaybackStart={handlePlaybackStart}
           onPlaybackProgress={handlePlaybackProgress}
           onPlaybackEnd={handlePlaybackEnd}
+          compact
         />
       )}
     </div>

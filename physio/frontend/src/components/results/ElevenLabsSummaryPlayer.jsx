@@ -25,6 +25,7 @@ export default function ElevenLabsSummaryPlayer({
   onPlaybackStart,
   onPlaybackProgress,
   onPlaybackEnd,
+  compact = false,
 }) {
   const [status, setStatus] = useState("idle");
   const [audioUrl, setAudioUrl] = useState(null);
@@ -136,41 +137,43 @@ export default function ElevenLabsSummaryPlayer({
   const isPlaying = status === "playing";
 
   return (
-    <div className="elevenlabs-player">
-      <div className="player-header">
-        <span className="player-title">Voice Summary</span>
-        <span className={`status-badge status-${status}`}>{STATUS_LABEL[status] || status}</span>
-      </div>
+    <div className={`elevenlabs-player${compact ? " elevenlabs-player--compact" : ""}`}>
+      {!compact && (
+        <div className="player-header">
+          <span className="player-title">Voice Summary</span>
+          <span className={`status-badge status-${status}`}>{STATUS_LABEL[status] || status}</span>
+        </div>
+      )}
 
-      {error && <p className="error-text">{error}</p>}
+      {error && !compact && <p className="error-text">{error}</p>}
 
       <div className="player-controls">
         {status === "idle" && (
           <button className="btn-primary" onClick={synthesize} disabled={!spokenSummary}>
-            Generate Voice
+            {compact ? "▶ Play summary" : "Generate Voice"}
           </button>
         )}
         {status === "loading" && (
           <button className="btn-primary" disabled>
-            <span className="spinner" /> Generating...
+            <span className="spinner" /> {compact ? "Preparing…" : "Generating..."}
           </button>
         )}
         {(status === "ready" || status === "blocked") && (
           <button className="btn-primary" onClick={playAudio}>
-            Play Summary
+            ▶ Play Summary
           </button>
         )}
         {status === "error" && (
           <button className="btn-secondary" onClick={synthesize}>
-            Retry
+            Retry Voice
           </button>
         )}
         {isPlaying && (
           <button className="btn-secondary" onClick={() => stopAudio("ready")}>
-            Stop
+            ◼ Stop
           </button>
         )}
-        {audioUrl && (
+        {!compact && audioUrl && (
           <button
             className={`btn-icon ${muted ? "muted" : ""}`}
             onClick={() => setMuted((value) => !value)}
@@ -179,9 +182,14 @@ export default function ElevenLabsSummaryPlayer({
             {muted ? "Mute" : "Audio"}
           </button>
         )}
+        {compact && (
+          <span className={`compact-status-badge status-${status}`}>
+            {STATUS_LABEL[status] || status}
+          </span>
+        )}
       </div>
 
-      {spokenSummary && (
+      {!compact && spokenSummary && (
         <p className="spoken-text muted">{spokenSummary}</p>
       )}
     </div>

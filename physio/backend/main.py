@@ -557,6 +557,28 @@ def list_session_results() -> list[dict[str, Any]]:
     return store.list_session_results()
 
 
+@app.post("/api/session/presentation-cache")
+def save_presentation_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    session_id = str(payload.get("session_id") or "")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    merged = store.save_presentation_cache(session_id, payload)
+    return {"status": "saved", "session_id": session_id, "cache": merged}
+
+
+@app.get("/api/session/presentation-cache/{session_id}")
+def get_presentation_cache(session_id: str) -> dict[str, Any]:
+    cache = store.get_presentation_cache(session_id)
+    if cache is None:
+        raise HTTPException(status_code=404, detail=f"No presentation cache for session {session_id}")
+    return cache
+
+
+@app.get("/api/session/presentation-caches")
+def list_presentation_caches() -> list[dict[str, Any]]:
+    return store.list_presentation_caches()
+
+
 @app.get("/api/storage/status")
 def storage_status() -> dict[str, Any]:
     return store.counts()
