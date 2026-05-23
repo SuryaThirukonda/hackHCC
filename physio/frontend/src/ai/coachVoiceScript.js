@@ -1,5 +1,6 @@
 const PHASE_VOICE = {
   CALIBRATION_READY: "Calibration set. Begin now.",
+  CALIBRATION_PENDING: "Click Begin, then bend to start.",
   WAITING_FOR_START: "Arm straight to start.",
   STRAIGHTEN_TO_START: "Straighten first.",
   EXTENDED_READY: "Bend slowly.",

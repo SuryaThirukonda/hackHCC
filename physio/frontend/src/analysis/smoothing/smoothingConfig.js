@@ -46,8 +46,7 @@ export const FORWARD_PRESS_SMOOTHING_CONFIG = {
 
 export const SMOOTHED_EXERCISE_IDS = new Set([
   "elbow_flexion_extension",
-  "shoulder_extension",
-  "seated_one_arm_forward_press"
+  "shoulder_extension"
 ]);
 
 export function smoothingConfigForExercise(exerciseId) {

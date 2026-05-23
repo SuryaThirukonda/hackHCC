@@ -167,6 +167,7 @@ function isForwardPressExercise(exercise) {
 function repPhaseForAnalyzerPhase(phase) {
   return {
     CALIBRATION_READY: "idle",
+    CALIBRATION_PENDING: "idle",
     WAITING_FOR_TRACKING: "idle",
     MOVE_TO_BENT: "lowering",
     START_BENT_HOLD: "holding",
@@ -189,7 +190,8 @@ function repPhaseForAnalyzerPhase(phase) {
 function humanPhaseForAnalyzerPhase(phase) {
   return {
     CALIBRATION_READY: "Begin now",
-    WAITING_FOR_TRACKING: "Start bent",
+    CALIBRATION_PENDING: "Calibrated",
+    WAITING_FOR_TRACKING: "Bend to start",
     MOVE_TO_BENT: "Move to bent",
     START_BENT_HOLD: "Hold bent",
     START_BENT_READY: "Ready",
@@ -368,10 +370,6 @@ export default function BrowserPoseOverlay({
   const [routineStarted, setRoutineStarted] = useState(false);
   const calibrationRef = useRef(calibration);
   const routineStartedRef = useRef(routineStarted);
-  // Auto-calibration state
-  const [autoCalState, setAutoCalState] = useState("idle"); // idle | scanning | confirmed
-  const autoCalWindowRef = useRef([]); // rolling distance samples for range detection
-  const autoCalStableRef = useRef(0); // ms the range has been stable
   const [cameraState, setCameraState] = useState("idle");
   const [cameraError, setCameraError] = useState("");
   const [debugMode, setDebugMode] = useState(false);
@@ -411,82 +409,12 @@ export default function BrowserPoseOverlay({
   });
 
   useEffect(() => {
-    if (forwardPressExercise && calibrationComplete) {
-      calibrationReadyUntilRef.current = Date.now() + 1600;
-      routineStartedRef.current = true;
-      setRoutineStarted(true);
-      onRoutineBeginRef.current?.();
-    }
     if (!calibrationComplete) {
       calibrationReadyUntilRef.current = 0;
       routineStartedRef.current = false;
       setRoutineStarted(false);
     }
   }, [calibrationComplete, forwardPressExercise]);
-
-  // ── Auto-calibration scanning loop ────────────────────────────────────────
-  // While autoCalState === "scanning", poll sensor samples every 200 ms.
-  // Track rolling min/max over a ~6 s window; when the range has been stable
-  // (settled within ±0.4 cm) for 1.5 s AND travel > MIN_TRAVEL_CM, lock in.
-  useEffect(() => {
-    if (autoCalState !== "scanning" || !forwardPressExercise) return undefined;
-
-    const MIN_TRAVEL_CM = 3.0;  // minimum hand movement to accept calibration
-    const SCAN_WINDOW_MS = 6000;
-    const STABLE_NEEDED_MS = 1500;
-    const STABLE_TOLERANCE_CM = 0.4;
-
-    const interval = window.setInterval(() => {
-      const now = Date.now();
-      const rawSamples = sensorStream.samplesRef.current;
-      if (!rawSamples.length) return;
-
-      // Keep only samples from the last SCAN_WINDOW_MS
-      const cutoff = now - SCAN_WINDOW_MS;
-      const recent = rawSamples.filter((s) => s.timestamp_ms >= cutoff);
-      autoCalWindowRef.current = recent;
-
-      if (recent.length < 8) return; // not enough data yet
-
-      const distances = recent.map((s) => s.distance_cm).filter(Number.isFinite);
-      const minD = Math.min(...distances);
-      const maxD = Math.max(...distances);
-      const travel = maxD - minD;
-
-      if (travel < MIN_TRAVEL_CM) return; // user hasn't moved enough yet
-
-      // Check stability: split window in halves and compare max/min drift
-      const half = Math.floor(recent.length / 2);
-      const firstHalf = recent.slice(0, half).map((s) => s.distance_cm).filter(Number.isFinite);
-      const secondHalf = recent.slice(half).map((s) => s.distance_cm).filter(Number.isFinite);
-      const rangeFirst = Math.max(...firstHalf) - Math.min(...firstHalf);
-      const rangeSecond = Math.max(...secondHalf) - Math.min(...secondHalf);
-      const drift = Math.abs(rangeFirst - rangeSecond);
-
-      if (drift > STABLE_TOLERANCE_CM) {
-        // Range is still changing — reset stable timer
-        autoCalStableRef.current = now;
-        return;
-      }
-
-      if (autoCalStableRef.current === 0) {
-        autoCalStableRef.current = now;
-        return;
-      }
-
-      if (now - autoCalStableRef.current >= STABLE_NEEDED_MS) {
-        // Stable and sufficient travel — lock calibration
-        const compressedCm = Math.round(minD * 100) / 100;
-        const stretchedCm = Math.round(maxD * 100) / 100;
-        setCalibration({ compressedCm, stretchedCm });
-        calibrationRef.current = { compressedCm, stretchedCm };
-        setAutoCalState("confirmed");
-        autoCalStableRef.current = 0;
-      }
-    }, 200);
-
-    return () => window.clearInterval(interval);
-  }, [autoCalState, forwardPressExercise, sensorStream.samplesRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -859,7 +787,12 @@ export default function BrowserPoseOverlay({
       analyzerOutput.coach_state = sensorStatus === "ok" ? "almost_there" : "low_confidence";
       analyzerOutput.local_coach_message = "Calibrate the bent and stretched distances before pressing.";
     }
-    if (isForwardPress && packetCalibrationComplete && Date.now() < calibrationReadyUntilRef.current) {
+    if (isForwardPress && packetCalibrationComplete && !routineStartedRef.current) {
+      analyzerOutput.phase = "CALIBRATION_PENDING";
+      analyzerOutput.coach_state = "good_form";
+      analyzerOutput.local_coach_message = "Calibration saved. Click Begin, then bend to start.";
+    }
+    if (isForwardPress && packetCalibrationComplete && routineStartedRef.current && Date.now() < calibrationReadyUntilRef.current) {
       analyzerOutput.phase = "CALIBRATION_READY";
       analyzerOutput.coach_state = "good_form";
       analyzerOutput.local_coach_message = "Calibration set. Begin now.";
@@ -1201,32 +1134,13 @@ export default function BrowserPoseOverlay({
         </div>
       )}
       {forwardPressExercise && cameraState === "ready" && (
-        <AutoCalibrationPanel
+        <ManualCalibrationPanel
           sensorStream={sensorStream}
-          autoCalState={autoCalState}
           calibration={calibration}
           calibrationComplete={calibrationComplete}
           calibrationQuality={calibrationQuality}
-          onStartScan={() => {
-            autoCalStableRef.current = 0;
-            autoCalWindowRef.current = [];
-            setAutoCalState("scanning");
-            setCalibration({ compressedCm: null, stretchedCm: null });
-            calibrationRef.current = { compressedCm: null, stretchedCm: null };
-            analyzerRef.current?.reset?.();
-            routineStartedRef.current = false;
-            setRoutineStarted(false);
-          }}
-          onReset={() => {
-            setAutoCalState("idle");
-            autoCalStableRef.current = 0;
-            autoCalWindowRef.current = [];
-            setCalibration({ compressedCm: null, stretchedCm: null });
-            calibrationRef.current = { compressedCm: null, stretchedCm: null };
-            analyzerRef.current?.reset?.();
-            routineStartedRef.current = false;
-            setRoutineStarted(false);
-          }}
+          onCaptureCompressed={() => captureCalibrationPoint("compressedCm")}
+          onCaptureStretched={() => captureCalibrationPoint("stretchedCm")}
           onBegin={beginRoutine}
         />
       )}
@@ -1239,99 +1153,64 @@ function formatDistance(value) {
 }
 
 /**
- * AutoCalibrationPanel
- *
- * Replaces the old "Set Bent / Set Stretched" button pair.
- *
- * Flow:
- *   idle      → user taps "Start calibration"
- *   scanning  → user moves hand in/out; system tracks min/max distance
- *   confirmed → range locked; user taps "Begin" to start reps
+ * ManualCalibrationPanel — click to capture bent (compressed) and extended (stretched) sensor distances.
  */
-function AutoCalibrationPanel({
+function ManualCalibrationPanel({
   sensorStream,
-  autoCalState,
   calibration,
   calibrationComplete,
   calibrationQuality,
-  onStartScan,
-  onReset,
-  onBegin,
+  onCaptureCompressed,
+  onCaptureStretched,
+  onBegin
 }) {
   const hasSensor = Number.isFinite(sensorStream.latest?.distance_cm);
-  const liveDist = hasSensor ? sensorStream.latest.distance_cm.toFixed(2) : null;
-  const travel = Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm)
-    ? Math.abs(calibration.stretchedCm - calibration.compressedCm)
-    : 0;
-  // Progress bar: travel relative to 5 cm target
-  const progress = Math.min(travel / 5, 1);
 
   return (
     <div className="sensor-calibration-panel">
       <div className="calibration-current">
-        <p className="eyebrow">Sensor calibration</p>
+        <p className="eyebrow">Distance calibration</p>
         <strong className="live-distance-value">
-          {liveDist != null ? `${liveDist} cm` : "Waiting for sensor"}
+          {hasSensor
+            ? `${sensorStream.latest.distance_cm.toFixed(2)} cm`
+            : "Waiting for sensor"}
         </strong>
       </div>
-
-      {autoCalState === "idle" && (
-        <>
-          <button
-            type="button"
-            className="calibration-begin"
-            onClick={onStartScan}
-            disabled={!hasSensor}
-          >
-            Start calibration
-          </button>
-          <small>Press the button then slowly move your hand forward and back a few times.</small>
-        </>
-      )}
-
-      {autoCalState === "scanning" && (
-        <>
-          <p className="calibration-scanning-hint">
-            Move your hand <strong>in and out</strong> slowly — full bent to full press.
-          </p>
-          <div className="cal-progress-bar-track">
-            <div
-              className="cal-progress-bar-fill"
-              style={{ width: `${Math.round(progress * 100)}%` }}
-            />
-          </div>
-          <div className="calibration-values">
-            <span><em>Near</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
-            <span><em>Far</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
-            <span><em>Range</em> <strong>{travel > 0 ? `${travel.toFixed(1)} cm` : "--"}</strong></span>
-          </div>
-          <small>Keep moving until the bar fills — system will lock automatically.</small>
-          <button type="button" className="calibration-reset-btn" onClick={onReset}>Cancel</button>
-        </>
-      )}
-
-      {autoCalState === "confirmed" && (
-        <>
-          <div className="calibration-values calibration-locked">
-            <span>✓ <em>Bent</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
-            <span>✓ <em>Extended</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
-            <span><em>Range</em> <strong>{travel.toFixed(1)} cm</strong></span>
-          </div>
-          <small className="calibration-ready">
-            {calibrationQuality === "low_travel"
-              ? "Calibrated — try a wider range for better scoring."
-              : "Calibrated and ready."}
-          </small>
-          <div className="calibration-actions">
-            <button type="button" className="calibration-begin" onClick={onBegin}>
-              Begin
-            </button>
-            <button type="button" className="calibration-reset-btn" onClick={onReset}>
-              Redo
-            </button>
-          </div>
-        </>
-      )}
+      <div className="calibration-actions">
+        <button
+          type="button"
+          onClick={onCaptureCompressed}
+          disabled={!hasSensor}
+        >
+          Set Bent
+        </button>
+        <button
+          type="button"
+          onClick={onCaptureStretched}
+          disabled={!hasSensor}
+        >
+          Set Stretched
+        </button>
+        <button
+          type="button"
+          className="calibration-begin"
+          onClick={onBegin}
+          disabled={!calibrationComplete}
+        >
+          Begin
+        </button>
+      </div>
+      <div className="calibration-values">
+        <span><em>Bent</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
+        <span><em>Stretched</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
+      </div>
+      <small className={calibrationComplete ? "calibration-ready" : ""}>
+        {calibrationComplete
+          ? calibrationQuality === "low_travel"
+            ? "Ready. Click Begin, then bend to start your first rep."
+            : "Ready. Click Begin, then bend to start your first rep."
+          : "Hold bent, click Set Bent. Press forward, click Set Stretched. Then Begin."}
+      </small>
     </div>
   );
 }

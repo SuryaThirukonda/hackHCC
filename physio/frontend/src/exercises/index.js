@@ -46,4 +46,4 @@ export const exercises = [
   }
 ];
 
-export const defaultExercise = elbowFlexionExtension;
+export const defaultExercise = seatedOneArmForwardPress;
