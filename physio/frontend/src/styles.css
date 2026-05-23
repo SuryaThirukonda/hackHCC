@@ -2458,23 +2458,45 @@ path.diagram-forearm {
   letter-spacing: 0.04em;
 }
 
-.heygen-loading-state {
+/* Standalone loading panel — shown while HeyGen renders the video */
+.heygen-loading-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 8px 0 4px;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 24px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
   text-align: center;
 }
 
-.heygen-elapsed {
-  font-size: 0.72rem;
+.heygen-spinner-ring {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--line);
+  border-top-color: var(--mint, #4ecca3);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.heygen-loading-label {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.heygen-elapsed-label {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.heygen-loading-note {
-  font-size: 0.7rem;
-  opacity: 0.65;
+.heygen-elapsed-note {
+  opacity: 0.6;
 }
 
 .loading-hint,

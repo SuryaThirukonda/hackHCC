@@ -4,13 +4,6 @@ import { getHeyGenVideoStatus, requestHeyGenCoach } from "../../api/sessionRecor
 const POLL_INTERVAL_MS = 5000;
 const POLL_MAX_ATTEMPTS = 36; // 3 min max
 
-/**
- * HeyGenSessionCoach
- *
- * Renders a HeyGen avatar video in the session results.
- * Flow: POST generate → get video_id (queued) → poll status every 5s → play when completed.
- * Logs timing to console for verification.
- */
 export default function HeyGenSessionCoach({
   spokenSummary,
   audioUrl,
@@ -34,7 +27,6 @@ export default function HeyGenSessionCoach({
     setHeygenStatus("loading");
     startTimeRef.current = performance.now();
 
-    // Live elapsed seconds counter so the user sees progress
     elapsedTimerRef.current = window.setInterval(() => {
       const sec = Math.round((performance.now() - startTimeRef.current) / 1000);
       setElapsedSec(sec);
@@ -45,7 +37,6 @@ export default function HeyGenSessionCoach({
         const generateMs = result.generate_time_ms ?? Math.round(performance.now() - startTimeRef.current);
         console.log(`[HeyGen] generate call completed in ${generateMs}ms, status=${result.status}, video_id=${result.avatar_session_id}`);
 
-        // Immediately available (rare — only if HeyGen returns a URL synchronously)
         if (result.video_url) {
           const totalMs = Math.round(performance.now() - startTimeRef.current);
           console.log(`[HeyGen] video ready immediately — total ${totalMs}ms`);
@@ -56,14 +47,14 @@ export default function HeyGenSessionCoach({
           return;
         }
 
-        // Queued — start polling
         if (result.avatar_session_id && result.status === "queued") {
-          console.log(`[HeyGen] queued video_id=${result.avatar_session_id} — starting poll every ${POLL_INTERVAL_MS / 1000}s`);
+          console.log(`[HeyGen] queued video_id=${result.avatar_session_id} — polling every ${POLL_INTERVAL_MS / 1000}s`);
+          setHeygenStatus("queued");
           startPolling(result.avatar_session_id);
           return;
         }
 
-        // Mock / missing config — not an error, just no video
+        // mock / not configured
         setHeygenStatus(result.status || "unavailable");
         clearTimers();
       })
@@ -98,7 +89,7 @@ export default function HeyGenSessionCoach({
         if (poll.status === "completed" && poll.video_url) {
           const totalMs = Math.round(performance.now() - startTimeRef.current);
           const totalSecs = Math.round(totalMs / 1000);
-          console.log(`[HeyGen] ✅ video ready after ${totalSecs}s total (${attempt + 1} poll${attempt === 0 ? "" : "s"})`);
+          console.log(`[HeyGen] ✅ video ready after ${totalSecs}s (${attempt + 1} poll${attempt === 0 ? "" : "s"})`);
           setTotalSec(totalSecs);
           setVideoUrl(poll.video_url);
           setHeygenStatus("ready");
@@ -115,7 +106,6 @@ export default function HeyGenSessionCoach({
           return;
         }
 
-        // Still pending/processing — keep polling
         startPolling(videoId, attempt + 1);
       } catch (err) {
         console.error("[HeyGen] poll request failed:", err);
@@ -124,21 +114,19 @@ export default function HeyGenSessionCoach({
     }, POLL_INTERVAL_MS);
   }
 
-  // LiveAvatar embed takes priority only when both are present
+  // LiveAvatar embed takes priority
   if (embedHtml) {
     return (
       <div className="heygen-coach-panel">
         <div className="embed-header">
           <span className="coach-label">Your Coach</span>
         </div>
-        <div
-          className="liveavatar-embed"
-          dangerouslySetInnerHTML={{ __html: embedHtml }}
-        />
+        <div className="liveavatar-embed" dangerouslySetInnerHTML={{ __html: embedHtml }} />
       </div>
     );
   }
 
+  // Video ready
   if (heygenStatus === "ready" && videoUrl) {
     return (
       <div className="heygen-coach-panel heygen-coach-panel--video">
@@ -150,50 +138,47 @@ export default function HeyGenSessionCoach({
             </span>
           )}
         </div>
-        <video
-          className="heygen-video"
-          src={videoUrl}
-          autoPlay
-          playsInline
-          controls
-        />
+        <video className="heygen-video" src={videoUrl} autoPlay playsInline controls />
       </div>
     );
   }
 
-  // Loading / fallback card
+  // Loading — clean standalone spinner
   const isLoading = heygenStatus === "loading" || heygenStatus === "queued";
-  return (
-    <div className="heygen-coach-panel companion-fallback">
-      <div className="companion-avatar">
-        <div className="avatar-circle">
-          <span className="avatar-icon">🧑‍⚕️</span>
-        </div>
-        <span className="coach-label">Coach video</span>
+  if (isLoading) {
+    return (
+      <div className="heygen-loading-panel">
+        <div className="heygen-spinner-ring" />
+        <p className="heygen-loading-label">Generating coach video…</p>
+        <p className="heygen-elapsed-label">
+          {elapsedSec > 0 ? `${elapsedSec}s` : "Submitting…"}
+          <span className="heygen-elapsed-note"> · usually 30–90s</span>
+        </p>
       </div>
-      {isLoading && (
-        <div className="heygen-loading-state">
-          <p className="muted">
-            <span className="spinner" /> Generating your coach video…
-          </p>
-          <p className="heygen-elapsed muted-sub">
-            {elapsedSec > 0 ? `${elapsedSec}s elapsed` : "Submitting to HeyGen…"}
-          </p>
-          <p className="heygen-loading-note muted-sub">
-            Avatar videos typically take 30–90 seconds to render.
-          </p>
-        </div>
-      )}
-      {heygenStatus === "error" && (
+    );
+  }
+
+  // Error
+  if (heygenStatus === "error") {
+    return (
+      <div className="heygen-coach-panel companion-fallback">
         <p className="error-text" style={{ fontSize: "0.75rem" }}>
           {error || "Coach video unavailable."}
         </p>
-      )}
-      {!isLoading && heygenStatus !== "error" && heygenStatus !== "idle" && (
+      </div>
+    );
+  }
+
+  // Not configured / mock — don't render anything distracting
+  if (heygenStatus !== "idle") {
+    return (
+      <div className="heygen-coach-panel companion-fallback">
         <p className="muted-sub" style={{ fontSize: "0.75rem" }}>
-          Coach video not available ({heygenStatus}).
+          Coach video not configured — restart the backend with <code>AVATAR_PROVIDER=heygen</code>.
         </p>
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
+
+  return null;
 }
