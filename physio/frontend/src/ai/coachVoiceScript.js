@@ -28,7 +28,12 @@ const STATE_VOICE = {
   low_confidence: "Keep arm visible.",
   good_form: "Keep control.",
   almost_there: "Stay with it.",
-  rep_complete: "Good rep."
+  rep_complete: "Good rep.",
+  // Chest-press framing cues — spoken when arm is outside optimal camera zone
+  frame_too_far: "Come closer to the camera.",
+  frame_too_close: "Step back from the camera.",
+  frame_arm_missing: "Move your arm fully into view.",
+  frame_arm_cut: "Reframe — part of your arm is cut off.",
 };
 
 export function phaseVoiceLine(phase) {

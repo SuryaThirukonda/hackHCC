@@ -11,7 +11,7 @@ from pathlib import Path
 
 from angle_utils import Point, elbow_angle, normalized_to_pixel, shoulder_raise_angle
 from jitter import MotionQualityTracker
-from overlay import draw_landmark, draw_target_arc, draw_text_panel, format_overlay_lines
+from overlay import draw_framing_guide, draw_landmark, draw_palm_center, draw_target_arc, draw_text_panel, format_overlay_lines
 from packet_emitter import PacketEmitter
 from rep_counter import RepCounter
 from scoring import COACH_MESSAGES, calculate_physio_score, choose_coach_state, range_status_for_angle
@@ -204,7 +204,20 @@ def closest_hand_to_wrist(hand_results, wrist: Point | None) -> tuple[list[Point
     return hands[0][1], hands[0][2]
 
 
-def draw_hand_points(frame, hands, width: int, height: int) -> None:
+def palm_center_pixel(hand_landmarks_list, width: int, height: int) -> tuple[int, int] | None:
+    """Return the pixel centre of the palm (average of knuckle-base landmarks 0,5,9,13,17)."""
+    PALM_INDICES = (0, 5, 9, 13, 17)
+    if not hand_landmarks_list:
+        return None
+    lms = hand_landmarks_list[0].landmark  # use closest hand
+    xs = [lms[i].x for i in PALM_INDICES]
+    ys = [lms[i].y for i in PALM_INDICES]
+    cx = int(sum(xs) / len(xs) * width)
+    cy = int(sum(ys) / len(ys) * height)
+    return (cx, cy)
+
+
+def draw_hand_points(frame, hands, width: int, height: int, draw_palm: bool = False) -> None:
     if not hands.multi_hand_landmarks:
         return
     connections = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (0, 9), (9, 10), (10, 11), (11, 12), (0, 13), (13, 14), (14, 15), (15, 16), (0, 17), (17, 18), (18, 19), (19, 20)]
@@ -214,6 +227,11 @@ def draw_hand_points(frame, hands, width: int, height: int) -> None:
             cv2.line(frame, pixels[start], pixels[end], (95, 185, 244), 2, cv2.LINE_AA)
         for point in pixels:
             draw_landmark(frame, point, (86, 216, 167), radius=3)
+
+    if draw_palm:
+        palm_pt = palm_center_pixel(hands.multi_hand_landmarks, width, height)
+        if palm_pt:
+            draw_palm_center(frame, palm_pt)
 
 
 def run_self_test() -> None:
@@ -272,17 +290,18 @@ def run_tracker(args: argparse.Namespace) -> None:
 
     with mp_pose.Pose(
         static_image_mode=False,
-        model_complexity=0,
+        # model_complexity=1 gives noticeably stabler landmarks than 0 at ~15 Hz
+        model_complexity=1,
         smooth_landmarks=True,
         enable_segmentation=False,
-        min_detection_confidence=0.55,
-        min_tracking_confidence=0.55,
+        min_detection_confidence=0.60,
+        min_tracking_confidence=0.60,
     ) as pose, mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=2,
+        max_num_hands=1,
         model_complexity=0,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_detection_confidence=0.55,
+        min_tracking_confidence=0.55,
     ) as hands:
         while True:
             ok, frame = cap.read()
@@ -354,18 +373,32 @@ def run_tracker(args: argparse.Namespace) -> None:
                     hip_present=hip_present,
                 )
 
+                is_press_exercise = args.exercise in ("seated_one_arm_forward_press", "forward_press")
+
                 if camera_status == "ok":
                     shoulder_xy = normalized_to_pixel(shoulder, width, height)
                     elbow_xy = normalized_to_pixel(elbow, width, height)
                     wrist_xy = normalized_to_pixel(wrist, width, height)
                     hip_xy = normalized_to_pixel(hip, width, height)
+
+                    # Torso line (faint)
                     cv2.line(frame, hip_xy, shoulder_xy, (90, 90, 90), 3, cv2.LINE_AA)
+                    # Upper arm
                     cv2.line(frame, shoulder_xy, elbow_xy, (244, 185, 95), 4, cv2.LINE_AA)
-                    cv2.line(frame, elbow_xy, wrist_xy, (86, 216, 167), 4, cv2.LINE_AA)
+                    # Forearm — thicker for press exercise so palm path is clear
+                    forearm_thickness = 6 if is_press_exercise else 4
+                    cv2.line(frame, elbow_xy, wrist_xy, (86, 216, 167), forearm_thickness, cv2.LINE_AA)
+
                     draw_landmark(frame, shoulder_xy, (244, 185, 95))
                     draw_landmark(frame, elbow_xy, (86, 216, 167))
-                    draw_landmark(frame, wrist_xy, (255, 116, 100))
+                    # Wrist dot: larger ring for press exercise to show push endpoint
+                    draw_landmark(frame, wrist_xy, (255, 116, 100), radius=10 if is_press_exercise else 7)
+
                     draw_target_arc(frame, shoulder_xy, args.target_angle, shoulder_value, last_packet["coach_state"])
+
+                    # Framing check + guide border for chest press
+                    if is_press_exercise:
+                        draw_framing_guide(frame, shoulder_xy, elbow_xy, wrist_xy, width, height)
                 else:
                     cv2.putText(
                         frame,
@@ -378,7 +411,8 @@ def run_tracker(args: argparse.Namespace) -> None:
                         cv2.LINE_AA,
                     )
 
-                draw_hand_points(frame, hand_results, width, height)
+                # Draw hand skeleton; for press exercise also draw the palm centre
+                draw_hand_points(frame, hand_results, width, height, draw_palm=is_press_exercise)
 
                 if now - last_emit_at >= args.emit_interval:
                     tracker.emit(last_packet)
@@ -413,6 +447,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Physio OpenCV and MediaPipe tracker")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--side", choices=["right", "left"], default="right")
+    parser.add_argument("--exercise", type=str, default="elbow_flexion_extension",
+                        help="Exercise id (e.g. seated_one_arm_forward_press)")
     parser.add_argument("--target-angle", type=float, default=90.0)
     parser.add_argument("--target-reps", type=int, default=8)
     parser.add_argument("--backend-url", default="http://localhost:8000")

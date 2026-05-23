@@ -97,6 +97,67 @@ function createAnalyzerForExercise(exercise) {
   return createElbowFlexionAnalyzer(exercise);
 }
 
+// ---------------------------------------------------------------------------
+// Framing analysis — chest press specific
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks whether the arm fits the camera frame well for a chest-press exercise.
+ * All inputs are normalized MediaPipe coordinates (0–1 range).
+ * Returns { ok, cue, state } where cue is a spoken prompt or null.
+ */
+function analyzePressFaming(shoulder, elbow, wrist) {
+  if (!shoulder || !elbow || !wrist) {
+    return { ok: false, cue: "Move your arm fully into view.", state: "frame_arm_missing" };
+  }
+
+  const EDGE = 0.08;           // 8% from any edge
+  const MIN_SPAN = 0.20;       // arm span < 20% of frame → too far
+  const MAX_SPAN = 0.80;       // arm span > 80% of frame → too close
+
+  // Compute arm span in normalized space (shoulder→wrist distance)
+  const armSpan = Math.hypot(shoulder.x - wrist.x, shoulder.y - wrist.y);
+
+  if (armSpan < MIN_SPAN) {
+    return { ok: false, cue: "Come closer to the camera.", state: "frame_too_far" };
+  }
+  if (armSpan > MAX_SPAN) {
+    return { ok: false, cue: "Step back from the camera.", state: "frame_too_close" };
+  }
+  if (wrist.x < EDGE || elbow.x < EDGE) {
+    return { ok: false, cue: "Shift right — arm is cut off.", state: "frame_arm_cut" };
+  }
+  if (wrist.x > 1 - EDGE || elbow.x > 1 - EDGE) {
+    return { ok: false, cue: "Shift left — arm is cut off.", state: "frame_arm_cut" };
+  }
+  if (wrist.y < EDGE || elbow.y < EDGE) {
+    return { ok: false, cue: "Lower your arm into frame.", state: "frame_arm_cut" };
+  }
+  if (wrist.y > 1 - EDGE || elbow.y > 1 - EDGE) {
+    return { ok: false, cue: "Raise your arm into frame.", state: "frame_arm_cut" };
+  }
+
+  return { ok: true, cue: null, state: "frame_ok" };
+}
+
+/**
+ * Compute palm centre pixel from MediaPipe hand landmark array.
+ * Uses the 5 knuckle-base landmarks (0,5,9,13,17) that form the palm ring.
+ */
+function palmCenterFromHandLandmarks(landmarks, width, height) {
+  if (!landmarks?.length) return null;
+  const PALM_IDX = [0, 5, 9, 13, 17];
+  let sx = 0;
+  let sy = 0;
+  let count = 0;
+  for (const idx of PALM_IDX) {
+    const lm = landmarks[idx];
+    if (lm) { sx += lm.x; sy += lm.y; count++; }
+  }
+  if (!count) return null;
+  return { x: (sx / count) * width, y: (sy / count) * height };
+}
+
 function isForwardPressExercise(exercise) {
   return exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
 }
@@ -600,6 +661,15 @@ export default function BrowserPoseOverlay({
             ? "almost_there"
             : "overextended"
       : "unknown";
+    // For the chest press, evaluate framing before analysis so the cue can be voiced.
+    const framingResult = isForwardPress && validAnalysis
+      ? analyzePressFaming(
+          shoulderSample.point,
+          elbowSample.point,
+          wristSample.point,
+        )
+      : null;
+
     const analyzerFrame = {
       timestampMs: Math.round(Date.now()),
       elbowAngle: validAnalysis ? elbowAngle : null,
@@ -619,6 +689,14 @@ export default function BrowserPoseOverlay({
     const analyzerOutput = analysisActive
       ? analyzerRef.current.analyze(analyzerFrame)
       : analyzerRef.current.preview(analyzerFrame);
+    // Framing cues override coach message when arm is not well-positioned in frame.
+    // Only override during waiting/pre-rep phases so it doesn't interrupt mid-rep.
+    const preRepPhases = new Set(["WAITING_FOR_TRACKING", "MOVE_TO_BENT", "START_BENT_HOLD", "START_BENT_READY"]);
+    if (framingResult && !framingResult.ok && preRepPhases.has(analyzerOutput.phase)) {
+      analyzerOutput.coach_state = framingResult.state;
+      analyzerOutput.local_coach_message = framingResult.cue;
+    }
+
     if (isForwardPress && !packetCalibrationComplete) {
       analyzerOutput.coach_state = sensorStatus === "ok" ? "almost_there" : "low_confidence";
       analyzerOutput.local_coach_message = "Calibrate the bent and stretched distances before pressing.";
@@ -691,6 +769,8 @@ export default function BrowserPoseOverlay({
       sensor_stream_url: sensorStream.url,
       shoulder_drift: analyzerOutput.shoulder_drift,
       completed_rep: analyzerOutput.completed_rep,
+      framing_cue: framingResult?.cue ?? null,
+      framing_ok: framingResult?.ok ?? true,
       _debug_landmarks: {
         shoulder: compactPoint(shoulder, shoulderSample.score),
         elbow: compactPoint(elbow, elbowSample.score),
@@ -744,7 +824,19 @@ export default function BrowserPoseOverlay({
       }
       if (shoulder) drawPoint(ctx, shoulder, "#f4b95f");
       if (elbow) drawPoint(ctx, elbow, "#56d8a7");
-      if (wrist) drawPoint(ctx, wrist, "#ff7464");
+      // Wrist: larger ring for chest press so the push endpoint is clearly visible
+      if (wrist) {
+        const isPressMode = isForwardPressExercise(exerciseRef.current);
+        if (isPressMode) {
+          // Double-ring wrist marker for chest press
+          ctx.beginPath();
+          ctx.strokeStyle = "#ff7464";
+          ctx.lineWidth = 2;
+          ctx.arc(wrist.x, wrist.y, 16, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        drawPoint(ctx, wrist, "#ff7464", isPressMode ? 9 : 7);
+      }
 
       if (packet.angle_valid && shoulder) {
         ctx.beginPath();
@@ -752,6 +844,56 @@ export default function BrowserPoseOverlay({
         ctx.lineWidth = 5;
         ctx.arc(shoulder.x, shoulder.y, 82, -Math.PI / 2 - 0.15, -Math.PI / 2 + 0.15);
         ctx.stroke();
+      }
+
+      // Palm centre from hand landmarks — chest press specific
+      if (isForwardPressExercise(exerciseRef.current) && handLandmarks?.length) {
+        const palmPx = palmCenterFromHandLandmarks(handLandmarks[0], width, height);
+        if (palmPx) {
+          // Outer ring
+          ctx.beginPath();
+          ctx.strokeStyle = "#56d8a7";
+          ctx.lineWidth = 2;
+          ctx.arc(palmPx.x, palmPx.y, 18, 0, Math.PI * 2);
+          ctx.stroke();
+          // Filled centre
+          ctx.beginPath();
+          ctx.fillStyle = "#56d8a7";
+          ctx.arc(palmPx.x, palmPx.y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          // Label
+          ctx.fillStyle = "#56d8a7";
+          ctx.font = "600 13px Segoe UI";
+          ctx.fillText("PALM", palmPx.x + 22, palmPx.y + 5);
+          // Line from wrist to palm centre
+          if (wrist) {
+            ctx.beginPath();
+            ctx.strokeStyle = "rgba(86,216,167,.45)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.moveTo(wrist.x, wrist.y);
+            ctx.lineTo(palmPx.x, palmPx.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+      }
+    }
+
+    // Framing guide border + cue for chest press
+    if (isForwardPressExercise(exerciseRef.current) && packet.angle_valid) {
+      const framingOk = packet.framing_ok !== false;
+      const borderColor = framingOk ? "rgba(86,216,167,.5)" : "rgba(95,185,244,.85)";
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(6, 6, width - 12, height - 12);
+
+      if (!framingOk && packet.framing_cue) {
+        ctx.fillStyle = "rgba(15,17,16,.82)";
+        ctx.fillRect(0, height - 62, width, 62);
+        ctx.fillStyle = "#5fb9f4";
+        ctx.font = "700 17px Segoe UI";
+        ctx.fillText(packet.framing_cue, 22, height - 30);
       }
     }
 
