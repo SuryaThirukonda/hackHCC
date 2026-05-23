@@ -41,6 +41,7 @@
       "type": "string",
       "enum": [
         "elbow_flexion_extension",
+        "seated_one_arm_forward_press",
         "right_arm_raise",
         "shoulder_flexion",
         "wrist_extension"

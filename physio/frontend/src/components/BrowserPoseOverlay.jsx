@@ -1,7 +1,9 @@
 import { Camera, Loader2, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createElbowFlexionAnalyzer } from "../analyzers/elbowFlexionAnalyzer.js";
+import { createPushMotionAnalyzer } from "../analyzers/pushMotionAnalyzer.js";
 import { postPacket } from "../api/client.js";
+import { useSensorStream } from "../sensors/useSensorStream.js";
 
 const TARGET_ANGLE = 90;
 const DETECT_INTERVAL_MS = 66;
@@ -88,8 +90,27 @@ function exerciseTargetAngle(exercise) {
   return TARGET_ANGLE;
 }
 
+function createAnalyzerForExercise(exercise) {
+  if (exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press") {
+    return createPushMotionAnalyzer(exercise);
+  }
+  return createElbowFlexionAnalyzer(exercise);
+}
+
+function isForwardPressExercise(exercise) {
+  return exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
+}
+
 function repPhaseForAnalyzerPhase(phase) {
   return {
+    CALIBRATION_READY: "idle",
+    WAITING_FOR_TRACKING: "idle",
+    MOVE_TO_BENT: "lowering",
+    START_BENT_HOLD: "holding",
+    START_BENT_READY: "resting",
+    PUSHING: "raising",
+    EXTENDED_HOLD: "holding",
+    RETURNING: "lowering",
     WAITING_FOR_START: "idle",
     STRAIGHTEN_TO_START: "lowering",
     EXTENDED_READY: "resting",
@@ -104,6 +125,14 @@ function repPhaseForAnalyzerPhase(phase) {
 
 function humanPhaseForAnalyzerPhase(phase) {
   return {
+    CALIBRATION_READY: "Begin now",
+    WAITING_FOR_TRACKING: "Start bent",
+    MOVE_TO_BENT: "Move to bent",
+    START_BENT_HOLD: "Hold bent",
+    START_BENT_READY: "Ready",
+    PUSHING: "Pressing",
+    EXTENDED_HOLD: "Hold reach",
+    RETURNING: "Returning",
     WAITING_FOR_START: "Start straight",
     STRAIGHTEN_TO_START: "Straighten",
     EXTENDED_READY: "Ready",
@@ -123,6 +152,23 @@ function compactPoint(point, score) {
     y: Number(point.y.toFixed(3)),
     score: Number(score.toFixed(3))
   };
+}
+
+function sensorStatusForSample(sensorStream, latestSensor, sensorExpectedActive, staleMs = 600) {
+  if (!sensorExpectedActive) return "offline";
+  if (latestSensor?.distance_cm != null && Date.now() - latestSensor.timestamp_ms <= staleMs) return "ok";
+  if (latestSensor?.distance_cm != null) return "warning";
+  if (sensorStream.status === "error") return "error";
+  if (sensorStream.status === "ok" || sensorStream.status === "connecting") return "warning";
+  return "offline";
+}
+
+function calibratedPositionForDistance(distanceCm, compressedCm, stretchedCm) {
+  if (!Number.isFinite(distanceCm) || !Number.isFinite(compressedCm) || !Number.isFinite(stretchedCm)) return null;
+  const travel = stretchedCm - compressedCm;
+  if (Math.abs(travel) < 0.01) return null;
+  const signedTravel = Math.sign(travel) * Math.max(Math.abs(travel), 0.25);
+  return clamp((distanceCm - compressedCm) / signedTravel, 0, 1);
 }
 
 function drawPoint(ctx, point, color, radius = 7) {
@@ -216,6 +262,7 @@ export default function BrowserPoseOverlay({
   active,
   sessionId,
   onPacket,
+  onRoutineBegin,
   side = "right",
   exercise,
   recordingActive = true,
@@ -236,9 +283,14 @@ export default function BrowserPoseOverlay({
   const latestPoseRef = useRef(null);
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
-  const analyzerRef = useRef(createElbowFlexionAnalyzer(exercise));
+  const analyzerRef = useRef(createAnalyzerForExercise(exercise));
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
+  const calibrationReadyUntilRef = useRef(0);
+  const [calibration, setCalibration] = useState({ compressedCm: null, stretchedCm: null });
+  const [routineStarted, setRoutineStarted] = useState(false);
+  const calibrationRef = useRef(calibration);
+  const routineStartedRef = useRef(routineStarted);
   const [cameraState, setCameraState] = useState("idle");
   const [cameraError, setCameraError] = useState("");
   const [debugMode, setDebugMode] = useState(false);
@@ -246,6 +298,7 @@ export default function BrowserPoseOverlay({
   const recordingActiveRef = useRef(recordingActive);
   const overlayCoachMessageRef = useRef(overlayCoachMessage);
   const onPacketRef = useRef(onPacket);
+  const onRoutineBeginRef = useRef(onRoutineBegin);
   const exerciseRef = useRef(exercise);
   const sessionIdRef = useRef(sessionId);
   const activeSideRef = useRef(activeSide);
@@ -253,9 +306,42 @@ export default function BrowserPoseOverlay({
   useEffect(() => { recordingActiveRef.current = recordingActive; }, [recordingActive]);
   useEffect(() => { overlayCoachMessageRef.current = overlayCoachMessage; }, [overlayCoachMessage]);
   useEffect(() => { onPacketRef.current = onPacket; }, [onPacket]);
+  useEffect(() => { onRoutineBeginRef.current = onRoutineBegin; }, [onRoutineBegin]);
+  useEffect(() => { calibrationRef.current = calibration; }, [calibration]);
+  useEffect(() => { routineStartedRef.current = routineStarted; }, [routineStarted]);
   useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { activeSideRef.current = activeSide; }, [activeSide]);
+
+  const forwardPressExercise = isForwardPressExercise(exercise);
+  const calibrationComplete = !forwardPressExercise ||
+    (Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm));
+  const calibrationTravelCm = Number.isFinite(calibration.compressedCm) && Number.isFinite(calibration.stretchedCm)
+    ? Math.abs(calibration.stretchedCm - calibration.compressedCm)
+    : null;
+  const calibrationQuality = !forwardPressExercise || !calibrationComplete
+    ? "missing"
+    : calibrationTravelCm < 1
+      ? "low_travel"
+      : "ok";
+
+  const sensorStream = useSensorStream({
+    active: Boolean(active && forwardPressExercise)
+  });
+
+  useEffect(() => {
+    if (forwardPressExercise && calibrationComplete) {
+      calibrationReadyUntilRef.current = Date.now() + 1600;
+      routineStartedRef.current = true;
+      setRoutineStarted(true);
+      onRoutineBeginRef.current?.();
+    }
+    if (!calibrationComplete) {
+      calibrationReadyUntilRef.current = 0;
+      routineStartedRef.current = false;
+      setRoutineStarted(false);
+    }
+  }, [calibrationComplete, forwardPressExercise]);
 
   useEffect(() => {
     let cancelled = false;
@@ -273,8 +359,12 @@ export default function BrowserPoseOverlay({
     debugModeRef.current = debugMode;
   }, [debugMode]);
   useEffect(() => {
-    analyzerRef.current = createElbowFlexionAnalyzer(exercise);
+    analyzerRef.current = createAnalyzerForExercise(exercise);
     previousSessionRef.current = sessionId;
+    calibrationRef.current = { compressedCm: null, stretchedCm: null };
+    routineStartedRef.current = false;
+    setCalibration({ compressedCm: null, stretchedCm: null });
+    setRoutineStarted(false);
   }, [exercise?.id]);
   useEffect(() => {
     if (previousSessionRef.current !== sessionId) {
@@ -283,6 +373,10 @@ export default function BrowserPoseOverlay({
         samplesRef.current = [];
       }
       previousSessionRef.current = sessionId;
+      calibrationRef.current = { compressedCm: null, stretchedCm: null };
+      routineStartedRef.current = false;
+      setCalibration({ compressedCm: null, stretchedCm: null });
+      setRoutineStarted(false);
     }
   }, [recordingActive, sessionId]);
   useEffect(() => {
@@ -405,10 +499,34 @@ export default function BrowserPoseOverlay({
     setCameraState((state) => state === "idle" ? "idle" : "stopped");
   }
 
+  function captureCalibrationPoint(kind) {
+    const latestSensor = sensorStream.latestSampleRef.current;
+    if (!Number.isFinite(latestSensor?.distance_cm)) return;
+    setCalibration((current) => {
+      const next = {
+        ...current,
+        [kind]: latestSensor.distance_cm
+      };
+      calibrationRef.current = next;
+      return next;
+    });
+    analyzerRef.current?.reset?.();
+    routineStartedRef.current = false;
+    setRoutineStarted(false);
+  }
+
+  function beginRoutine() {
+    analyzerRef.current?.reset?.();
+    samplesRef.current = [];
+    calibrationReadyUntilRef.current = Date.now() + 1200;
+    routineStartedRef.current = true;
+    setRoutineStarted(true);
+    onRoutineBeginRef.current?.();
+  }
+
   function buildPacket(poseLandmarks, handLandmarks, timestampMs) {
     const exercise = exerciseRef.current;
     const activeSide = activeSideRef.current;
-    const recordingActive = recordingActiveRef.current;
     const sessionId = sessionIdRef.current;
     const targetAngle = exerciseTargetAngle(exercise);
     const indices = POSE[activeSide];
@@ -446,25 +564,73 @@ export default function BrowserPoseOverlay({
     const compensation = validAnalysis ? "none" : "low_confidence";
 
     const motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
-    const combinedJitter = validAnalysis ? motion.jitter / 2 : 0;
+    const latestSensor = sensorStream.latestSampleRef.current;
+    const isForwardPress = isForwardPressExercise(exercise);
+    const currentCalibration = calibrationRef.current;
+    const packetCalibrationComplete = !isForwardPress ||
+      (Number.isFinite(currentCalibration.compressedCm) && Number.isFinite(currentCalibration.stretchedCm));
+    const packetCalibrationTravelCm = Number.isFinite(currentCalibration.compressedCm) && Number.isFinite(currentCalibration.stretchedCm)
+      ? Math.abs(currentCalibration.stretchedCm - currentCalibration.compressedCm)
+      : null;
+    const packetCalibrationQuality = !isForwardPress || !packetCalibrationComplete
+      ? "missing"
+      : packetCalibrationTravelCm < 1
+        ? "low_travel"
+        : "ok";
+    const sensorStatus = isForwardPress
+      ? sensorStatusForSample(sensorStream, latestSensor, true, exercise?.sensorStaleMs ?? 600)
+      : "offline";
+    const sensorJitterScore = latestSensor?.sensor_jitter_score ?? 0;
+    const calibratedPosition = isForwardPress && packetCalibrationComplete
+      ? calibratedPositionForDistance(latestSensor?.distance_cm, currentCalibration.compressedCm, currentCalibration.stretchedCm)
+      : null;
+    const combinedJitter = validAnalysis
+      ? isForwardPress
+        ? Math.max(motion.jitter / 2, packetCalibrationComplete ? 0 : sensorJitterScore)
+        : motion.jitter / 2
+      : 0;
     const currentRange = validAnalysis && exercise?.targetPosition
       ? elbowAngle <= exercise.targetPosition.elbowAngleMax && elbowAngle >= exercise.targetPosition.elbowAngleMin
         ? "target_met"
-        : elbowAngle > exercise.targetPosition.elbowAngleMax
-          ? "almost_there"
-          : "overextended"
+        : isForwardPress
+          ? elbowAngle < exercise.targetPosition.elbowAngleMin
+            ? "almost_there"
+            : "overextended"
+          : elbowAngle > exercise.targetPosition.elbowAngleMax
+            ? "almost_there"
+            : "overextended"
       : "unknown";
     const analyzerFrame = {
-      timestampMs: Math.round(timestampMs),
+      timestampMs: Math.round(Date.now()),
       elbowAngle: validAnalysis ? elbowAngle : null,
       shoulderAngle: validAnalysis ? upperArmAngle : null,
       landmarkConfidence: confidence,
       jitterScore: combinedJitter,
+      cameraJitterScore: motion.jitter,
+      distanceCm: latestSensor?.distance_cm ?? null,
+      sensorTimestampMs: latestSensor?.timestamp_ms ?? null,
+      sensorJitterScore: packetCalibrationComplete ? 0 : sensorJitterScore,
+      calibrationCompressedCm: currentCalibration.compressedCm,
+      calibrationStretchedCm: currentCalibration.stretchedCm,
+      sensorValid: sensorStatus === "ok",
       validLandmarks: validAnalysis
     };
-    const analyzerOutput = recordingActive
+    const analysisActive = !isForwardPress || (packetCalibrationComplete && routineStartedRef.current);
+    const analyzerOutput = analysisActive
       ? analyzerRef.current.analyze(analyzerFrame)
       : analyzerRef.current.preview(analyzerFrame);
+    if (isForwardPress && !packetCalibrationComplete) {
+      analyzerOutput.coach_state = sensorStatus === "ok" ? "almost_there" : "low_confidence";
+      analyzerOutput.local_coach_message = "Calibrate the bent and stretched distances before pressing.";
+    }
+    if (isForwardPress && packetCalibrationComplete && Date.now() < calibrationReadyUntilRef.current) {
+      analyzerOutput.phase = "CALIBRATION_READY";
+      analyzerOutput.coach_state = "good_form";
+      analyzerOutput.local_coach_message = "Calibration set. Begin now.";
+    }
+    const packetSensorJitter = isForwardPress && packetCalibrationComplete
+      ? analyzerOutput.sensor_linearity_score ?? sensorJitterScore
+      : sensorJitterScore;
     const state = analyzerOutput.coach_state;
 
     return {
@@ -473,14 +639,14 @@ export default function BrowserPoseOverlay({
       timestamp_ms: Math.round(Date.now()),
       exercise: exercise?.id || "elbow_flexion_extension",
       side: activeSide,
-      device_id: "browser-webcam",
-      sensor_status: "offline",
+      device_id: latestSensor?.device_id || "browser-webcam",
+      sensor_status: sensorStatus,
       camera_status: cameraStatus,
-      distance_cm: null,
-      sensor_jitter_score: 0,
+      distance_cm: latestSensor?.distance_cm ?? null,
+      sensor_jitter_score: Number(packetSensorJitter.toFixed(3)),
       opencv_jitter_score: Number(motion.jitter.toFixed(3)),
-      combined_jitter_score: Number(combinedJitter.toFixed(3)),
-      jitter_detected: validAnalysis && combinedJitter > 0.65,
+      combined_jitter_score: Number(Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0).toFixed(3)),
+      jitter_detected: validAnalysis && Math.max(combinedJitter, analyzerOutput.jitter_score ?? 0) > 0.65,
       shoulder_angle: validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
       elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
       target_angle: targetAngle,
@@ -512,6 +678,17 @@ export default function BrowserPoseOverlay({
       analyzer_output: analyzerOutput,
       analyzer_phase_label: humanPhaseForAnalyzerPhase(analyzerOutput.phase),
       range_of_motion: analyzerOutput.range_of_motion,
+      push_depth_cm: analyzerOutput.push_depth_cm,
+      sensor_linearity_score: analyzerOutput.sensor_linearity_score,
+      sensor_valid: analyzerOutput.sensor_valid,
+      calibration_complete: packetCalibrationComplete,
+      calibration_quality: packetCalibrationQuality,
+      calibration_travel_cm: packetCalibrationTravelCm == null ? null : Number(packetCalibrationTravelCm.toFixed(2)),
+      calibration_compressed_cm: currentCalibration.compressedCm,
+      calibration_stretched_cm: currentCalibration.stretchedCm,
+      calibrated_position: calibratedPosition == null ? null : Number(calibratedPosition.toFixed(3)),
+      sensor_command_status: sensorStream.commandStatus,
+      sensor_stream_url: sensorStream.url,
       shoulder_drift: analyzerOutput.shoulder_drift,
       completed_rep: analyzerOutput.completed_rep,
       _debug_landmarks: {
@@ -608,7 +785,7 @@ export default function BrowserPoseOverlay({
         coach_state: packet.coach_state
       });
     }
-    if (recordingActive) {
+    if (recordingActiveRef.current && packet.calibration_complete !== false) {
       try {
         await postPacket(packet);
       } catch {
@@ -682,6 +859,57 @@ export default function BrowserPoseOverlay({
           <button type="button" className="camera-stop" onClick={stopCamera}>Stop camera</button>
         </div>
       )}
+      {forwardPressExercise && cameraState === "ready" && (
+        <div className="sensor-calibration-panel">
+          <div className="calibration-current">
+            <p className="eyebrow">Distance calibration</p>
+            <strong className="live-distance-value">
+              {Number.isFinite(sensorStream.latest?.distance_cm)
+                ? `${sensorStream.latest.distance_cm.toFixed(2)} cm`
+                : "Waiting for sensor"}
+            </strong>
+          </div>
+          <div className="calibration-actions">
+            <button
+              type="button"
+              onClick={() => captureCalibrationPoint("compressedCm")}
+              disabled={!Number.isFinite(sensorStream.latest?.distance_cm)}
+            >
+              Set Bent
+            </button>
+            <button
+              type="button"
+              onClick={() => captureCalibrationPoint("stretchedCm")}
+              disabled={!Number.isFinite(sensorStream.latest?.distance_cm)}
+            >
+              Set Stretched
+            </button>
+            <button
+              type="button"
+              className="calibration-begin"
+              onClick={beginRoutine}
+              disabled={!calibrationComplete}
+            >
+              Begin
+            </button>
+          </div>
+          <div className="calibration-values">
+            <span><em>Bent</em> <strong>{formatDistance(calibration.compressedCm)}</strong></span>
+            <span><em>Stretched</em> <strong>{formatDistance(calibration.stretchedCm)}</strong></span>
+          </div>
+          <small className={calibrationComplete ? "calibration-ready" : ""}>
+            {calibrationComplete
+              ? calibrationQuality === "low_travel"
+                ? "Ready. Begin routine. Re-set wider values for better distance scoring."
+                : "Ready. Begin routine."
+              : "Set both values before reps are recorded."}
+          </small>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatDistance(value) {
+  return Number.isFinite(value) ? `${value.toFixed(2)} cm` : "--";
 }

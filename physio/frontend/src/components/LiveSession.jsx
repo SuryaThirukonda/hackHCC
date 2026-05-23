@@ -24,6 +24,10 @@ function phaseLabel(packet) {
   }[packet.rep_phase] || packet.rep_phase || "Waiting";
 }
 
+function isForwardPress(exercise) {
+  return exercise?.movementType === "forward_press" || exercise?.id === "seated_one_arm_forward_press";
+}
+
 function targetLabel(packet, exercise) {
   if (exercise?.targetPosition) {
     return `${exercise.targetPosition.elbowAngleMin}-${exercise.targetPosition.elbowAngleMax}`;
@@ -34,6 +38,11 @@ function targetLabel(packet, exercise) {
 function anglePercent(packet, exercise) {
   const angle = primaryAngle(packet, exercise);
   if (!packet || angle == null) return 0;
+  if (isForwardPress(exercise) && exercise.startPosition && exercise.targetPosition) {
+    const start = exercise.startPosition.elbowAngleMax;
+    const target = (exercise.targetPosition.elbowAngleMin + exercise.targetPosition.elbowAngleMax) / 2;
+    return Math.max(0, Math.min(100, ((angle - start) / Math.max(target - start, 1)) * 100));
+  }
   if (exercise?.joint === "elbow" && exercise.startPosition && exercise.targetPosition) {
     const start = exercise.startPosition.elbowAngleMax;
     const target = (exercise.targetPosition.elbowAngleMin + exercise.targetPosition.elbowAngleMax) / 2;
@@ -64,6 +73,7 @@ export default function LiveSession({
   sourceStatus,
   sessionId,
   onBrowserPacket,
+  onRoutineBegin,
   frameTick = 0,
   showDebug = true,
   exercise,
@@ -114,6 +124,7 @@ export default function LiveSession({
             recordingActive={recordingActive}
             overlayCoachMessage={overlayCoachMessage}
             onPacket={onBrowserPacket}
+            onRoutineBegin={onRoutineBegin}
             bonusRepRequested={bonusRepRequested}
           />
         ) : (
@@ -135,7 +146,7 @@ export default function LiveSession({
           </div>
         )}
         <MetricCard icon={Activity} label={primaryAngleLabel(exercise)} value={formatMetric(primaryAngle(packet, exercise))} unit="deg" accent="mint" />
-        <MetricCard icon={Target} label={exercise?.joint === "elbow" ? "Target flexion zone" : "Target angle"} value={targetLabel(packet, exercise)} unit="deg" accent="amber" />
+        <MetricCard icon={Target} label={isForwardPress(exercise) ? "Target extension zone" : exercise?.joint === "elbow" ? "Target flexion zone" : "Target angle"} value={targetLabel(packet, exercise)} unit="deg" accent="amber" />
         {exercise?.joint === "elbow" && (
           <MetricCard icon={Ruler} label="Upper arm drift" value={formatMetric(packet?.shoulder_drift)} unit="deg" accent="blue" />
         )}
@@ -145,7 +156,13 @@ export default function LiveSession({
         {exercise?.joint === "elbow" && (
           <>
             <MetricCard icon={Target} label="Hold time" value={formatMetric(packet?.hold_time_sec)} unit="s" accent="amber" />
-            <MetricCard icon={Activity} label="ROM" value={formatMetric(packet?.range_of_motion)} unit="deg" accent="mint" />
+            <MetricCard icon={Activity} label={isForwardPress(exercise) ? "Extension ROM" : "ROM"} value={formatMetric(packet?.range_of_motion)} unit="deg" accent="mint" />
+          </>
+        )}
+        {isForwardPress(exercise) && (
+          <>
+            <MetricCard icon={Ruler} label="Push depth" value={formatMetric(packet?.push_depth_cm)} unit="cm" accent="mint" />
+            <MetricCard icon={Waves} label="Distance linearity" value={formatMetric(packet?.sensor_linearity_score, 2)} accent="lime" />
           </>
         )}
         {realMode && (
@@ -157,8 +174,8 @@ export default function LiveSession({
   );
 }
 
-function formatMetric(value) {
-  return value == null ? "--" : value.toFixed(1);
+function formatMetric(value, digits = 1) {
+  return value == null ? "--" : value.toFixed(digits);
 }
 
 function boolText(value) {

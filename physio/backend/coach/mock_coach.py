@@ -29,6 +29,8 @@ ELBOW_COACH_MESSAGES = {
 
 
 def coach_message_for_packet(packet: PhysioPacket) -> str:
+    if packet.exercise == "seated_one_arm_forward_press":
+        return packet.local_coach_message
     messages = ELBOW_COACH_MESSAGES if packet.exercise == "elbow_flexion_extension" else COACH_MESSAGES
     return messages.get(packet.coach_state, packet.local_coach_message)
 

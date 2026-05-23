@@ -2,6 +2,7 @@ import { Activity, ClipboardCheck, Clock3, Gauge, Repeat2, ShieldCheck, Target, 
 import MetricCard from "./MetricCard.jsx";
 
 export default function SessionSummary({ summary, aiSummaryText, aiHealthReport, compact = false }) {
+  const forwardPress = summary?.exercise === "seated_one_arm_forward_press";
   return (
     <section className="summary-panel">
       {!compact && (
@@ -30,8 +31,20 @@ export default function SessionSummary({ summary, aiSummaryText, aiHealthReport,
               <MetricCard icon={Clock3} label="Session time" value={formatSummaryMetric(summary.duration_sec, 0)} unit="s" accent="blue" />
               <MetricCard icon={Repeat2} label="Total reps" value={summary.total_reps ?? "--"} accent="coral" />
               <MetricCard icon={ShieldCheck} label="Clean reps" value={summary.clean_reps ?? "--"} accent="mint" />
-              <MetricCard icon={Target} label="Best ROM" value={formatSummaryMetric(summary.best_range_of_motion ?? summary.best_angle)} unit="deg" accent="amber" />
-              <MetricCard icon={Target} label="Avg ROM" value={formatSummaryMetric(summary.average_range_of_motion ?? summary.average_angle)} unit="deg" accent="amber" />
+              <MetricCard
+                icon={Target}
+                label={forwardPress ? "Best press" : "Best ROM"}
+                value={formatSummaryMetric(forwardPress ? summary.best_push_depth_cm : summary.best_range_of_motion ?? summary.best_angle)}
+                unit={forwardPress ? "cm" : "deg"}
+                accent="amber"
+              />
+              <MetricCard
+                icon={Target}
+                label={forwardPress ? "Avg press" : "Avg ROM"}
+                value={formatSummaryMetric(forwardPress ? summary.average_push_depth_cm : summary.average_range_of_motion ?? summary.average_angle)}
+                unit={forwardPress ? "cm" : "deg"}
+                accent="amber"
+              />
               <MetricCard icon={Clock3} label="Avg hold" value={formatSummaryMetric(summary.average_hold_time_sec)} unit="s" accent="blue" />
               <MetricCard icon={Gauge} label="Average score" value={summary.average_physio_score ?? "--"} accent="blue" />
               <MetricCard icon={Waves} label="Average jitter" value={formatSummaryMetric(summary.average_jitter_score, 2)} accent="lime" />
@@ -51,6 +64,7 @@ export default function SessionSummary({ summary, aiSummaryText, aiHealthReport,
 }
 
 function RepBreakdown({ reps }) {
+  const forwardPress = reps.some((rep) => Number.isFinite(rep.push_depth_cm));
   return (
     <div className="rep-breakdown">
       <div className="rep-breakdown-heading">
@@ -63,11 +77,11 @@ function RepBreakdown({ reps }) {
           <span>Time</span>
           <span>Total</span>
           <span>Hold</span>
-          <span>ROM</span>
+          <span>{forwardPress ? "Press" : "ROM"}</span>
           <span>Score</span>
           <span>Issue</span>
           {reps.map((rep) => (
-            <FragmentRow key={rep.rep_index} rep={rep} sessionStartMs={summaryStartMs(reps, rep)} />
+            <FragmentRow key={rep.rep_index} rep={rep} sessionStartMs={summaryStartMs(reps, rep)} forwardPress={forwardPress} />
           ))}
         </div>
       ) : (
@@ -77,14 +91,18 @@ function RepBreakdown({ reps }) {
   );
 }
 
-function FragmentRow({ rep, sessionStartMs }) {
+function FragmentRow({ rep, sessionStartMs, forwardPress }) {
   return (
     <>
       <strong>#{rep.rep_index}</strong>
       <span>{formatRepWindow(rep, sessionStartMs)}</span>
       <span>{formatSummaryMetric(rep.rep_duration_sec)}s</span>
       <span>{formatSummaryMetric(rep.hold_time_sec)}s</span>
-      <span>{formatSummaryMetric(rep.range_of_motion)} deg</span>
+      <span>
+        {forwardPress && Number.isFinite(rep.push_depth_cm)
+          ? `${formatSummaryMetric(rep.push_depth_cm)} cm`
+          : `${formatSummaryMetric(rep.range_of_motion)} deg`}
+      </span>
       <span>{rep.physio_score ?? "--"}</span>
       <span>{issueLabel(rep.issue)}</span>
     </>
@@ -104,12 +122,16 @@ function formatRepWindow(rep, sessionStartMs) {
 }
 
 function exerciseLabel(id) {
-  return id === "elbow_flexion_extension" ? "Elbow Flexion" : id || "--";
+  return {
+    elbow_flexion_extension: "Elbow Flexion",
+    seated_one_arm_forward_press: "Forward Press"
+  }[id] || id || "--";
 }
 
 function issueLabel(issue) {
   return {
     did_not_bend_enough: "bend deeper",
+    short_push_depth: "short press",
     did_not_hold_long_enough: "hold longer",
     moved_too_fast: "too fast",
     too_jittery: "jittery",
