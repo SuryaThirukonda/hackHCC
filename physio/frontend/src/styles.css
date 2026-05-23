@@ -1396,6 +1396,51 @@ path.diagram-forearm {
   color: #56d8a7;
 }
 
+/* Auto-calibration progress bar */
+.cal-progress-bar-track {
+  grid-column: 1 / -1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(244, 241, 232, 0.10);
+  overflow: hidden;
+}
+.cal-progress-bar-fill {
+  height: 100%;
+  background: var(--mint);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+
+.calibration-scanning-hint {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+  color: var(--ink);
+  margin: 0;
+}
+.calibration-scanning-hint strong {
+  color: var(--mint);
+}
+
+.calibration-locked span {
+  color: var(--mint);
+}
+
+.calibration-reset-btn {
+  grid-column: 1 / -1;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+.calibration-reset-btn:hover {
+  border-color: var(--coral);
+  color: var(--coral);
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }

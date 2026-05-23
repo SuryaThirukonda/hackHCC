@@ -3,9 +3,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const DEFAULT_SENSOR_WS_URL = "ws://localhost:8765";
 const SENSOR_URL_STORAGE_KEY = "physio_sensor_ws_url";
 const MAX_RETAINED_SAMPLES = 600;
+// Median window applied to raw distance readings before any downstream use.
+// Eliminates single-sample spikes without adding lag to the trend signal.
+const DISTANCE_MEDIAN_WINDOW = 7;
 
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
+}
+
+function rollingMedianDistance(rawSamples) {
+  const recent = rawSamples
+    .slice(-DISTANCE_MEDIAN_WINDOW)
+    .map((s) => s._raw_distance_cm ?? s.distance_cm)
+    .filter(Number.isFinite);
+  if (!recent.length) return null;
+  const sorted = [...recent].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 function configuredSensorUrl() {
@@ -142,21 +158,28 @@ export function useSensorStream({ active = false, url } = {}) {
 
       if (Number.isFinite(payload.distance_cm)) {
         const timestampMs = Number.isFinite(payload.timestamp_ms) ? payload.timestamp_ms : Date.now();
+        // Store raw distance alongside smoothed so the median function can access it
         const sample = {
           timestamp_ms: timestampMs,
-          distance_cm: payload.distance_cm,
+          _raw_distance_cm: payload.distance_cm,
+          distance_cm: payload.distance_cm, // will be replaced below after push
           raw: payload
         };
         samplesRef.current.push(sample);
         while (samplesRef.current.length > MAX_RETAINED_SAMPLES) samplesRef.current.shift();
 
+        // Apply rolling median to suppress single-sample spikes
+        const smoothedDistance = rollingMedianDistance(samplesRef.current) ?? payload.distance_cm;
+        sample.distance_cm = smoothedDistance;
+
         const computedJitter = sensorLinearityScore(samplesRef.current);
         const jitterScore = Number.isFinite(payload.sensor_jitter_score)
           ? clamp(Math.max(payload.sensor_jitter_score, computedJitter), 0, 1)
           : computedJitter;
-      const latest = {
+        const latest = {
           timestamp_ms: timestampMs,
-          distance_cm: payload.distance_cm,
+          distance_cm: smoothedDistance,
+          _raw_distance_cm: payload.distance_cm,
           sensor_status: "ok",
           sensor_jitter_score: Number(jitterScore.toFixed(3)),
           sensor_jitter_detected: jitterScore > 0.55,
