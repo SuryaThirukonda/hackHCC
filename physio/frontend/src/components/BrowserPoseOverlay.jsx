@@ -1,11 +1,13 @@
 import { Camera, Loader2, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPoseSignalSmoother } from "../analysis/smoothing/poseSignalSmoother.js";
+import { SMOOTHED_EXERCISE_IDS } from "../analysis/smoothing/smoothingConfig.js";
 import { createElbowFlexionAnalyzer } from "../analyzers/elbowFlexionAnalyzer.js";
 import { postPacket } from "../api/client.js";
 
 const TARGET_ANGLE = 90;
-const DETECT_INTERVAL_MS = 66;
-const POST_INTERVAL_MS = 500;
+const DETECT_INTERVAL_MS = 33;
+const POST_INTERVAL_MS = 250;
 const MIN_LANDMARK_CONFIDENCE = 0.45;
 const MIN_PRESENT_SCORE = 0.45;
 const CAMERA_PREF_KEY = "physio_browser_camera_enabled";
@@ -233,10 +235,12 @@ export default function BrowserPoseOverlay({
   const lastDetectAtRef = useRef(0);
   const lastPostAtRef = useRef(0);
   const latestPacketRef = useRef(null);
+  const lastPublishedAtRef = useRef(0);
   const latestPoseRef = useRef(null);
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
   const analyzerRef = useRef(createElbowFlexionAnalyzer(exercise));
+  const smootherRef = useRef(createPoseSignalSmoother());
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
   const [cameraState, setCameraState] = useState("idle");
@@ -274,12 +278,14 @@ export default function BrowserPoseOverlay({
   }, [debugMode]);
   useEffect(() => {
     analyzerRef.current = createElbowFlexionAnalyzer(exercise);
+    smootherRef.current.reset();
     previousSessionRef.current = sessionId;
   }, [exercise?.id]);
   useEffect(() => {
     if (previousSessionRef.current !== sessionId) {
       if (!recordingActive) {
         analyzerRef.current.reset();
+        smootherRef.current.reset();
         samplesRef.current = [];
       }
       previousSessionRef.current = sessionId;
@@ -288,6 +294,7 @@ export default function BrowserPoseOverlay({
   useEffect(() => {
     if (!previousRecordingRef.current && recordingActive) {
       analyzerRef.current.reset();
+      smootherRef.current.reset();
       samplesRef.current = [];
     }
     previousRecordingRef.current = recordingActive;
@@ -445,22 +452,43 @@ export default function BrowserPoseOverlay({
     const cameraStatus = validAnalysis ? "ok" : "warning";
     const compensation = validAnalysis ? "none" : "low_confidence";
 
-    const motion = updateMotion(samplesRef.current, timestampMs, validAnalysis ? elbowAngle : null);
-    const combinedJitter = validAnalysis ? motion.jitter / 2 : 0;
-    const currentRange = validAnalysis && exercise?.targetPosition
-      ? elbowAngle <= exercise.targetPosition.elbowAngleMax && elbowAngle >= exercise.targetPosition.elbowAngleMin
+    const smootherEnabled = SMOOTHED_EXERCISE_IDS.has(exercise?.id || "elbow_flexion_extension");
+    const smoothedFrame = smootherEnabled
+      ? smootherRef.current.update({
+        timestampMs,
+        elbowAngle,
+        shoulderAngle: upperArmAngle,
+        landmarkConfidence: confidence,
+        shoulder,
+        elbow,
+        wrist
+      })
+      : null;
+    const analyzerElbowAngle = smootherEnabled ? smoothedFrame.smoothed.elbowAngle : elbowAngle;
+    const analyzerShoulderAngle = smootherEnabled ? smoothedFrame.smoothed.shoulderAngle : upperArmAngle;
+    const analyzerValid = smootherEnabled ? smoothedFrame.validity.valid : validAnalysis;
+
+    const motion = updateMotion(samplesRef.current, timestampMs, analyzerValid ? analyzerElbowAngle : null);
+    const combinedJitter = analyzerValid
+      ? smootherEnabled
+        ? smoothedFrame.jitter.cameraJitterScore
+        : motion.jitter / 2
+      : 0;
+    const currentRange = analyzerValid && exercise?.targetPosition
+      ? analyzerElbowAngle <= exercise.targetPosition.elbowAngleMax && analyzerElbowAngle >= exercise.targetPosition.elbowAngleMin
         ? "target_met"
-        : elbowAngle > exercise.targetPosition.elbowAngleMax
+        : analyzerElbowAngle > exercise.targetPosition.elbowAngleMax
           ? "almost_there"
           : "overextended"
       : "unknown";
+    // Raw MediaPipe angles are smoothed before analyzer state transitions.
     const analyzerFrame = {
       timestampMs: Math.round(timestampMs),
-      elbowAngle: validAnalysis ? elbowAngle : null,
-      shoulderAngle: validAnalysis ? upperArmAngle : null,
+      elbowAngle: analyzerValid ? analyzerElbowAngle : null,
+      shoulderAngle: analyzerValid ? analyzerShoulderAngle : null,
       landmarkConfidence: confidence,
       jitterScore: combinedJitter,
-      validLandmarks: validAnalysis
+      validLandmarks: analyzerValid
     };
     const analyzerOutput = recordingActive
       ? analyzerRef.current.analyze(analyzerFrame)
@@ -475,18 +503,32 @@ export default function BrowserPoseOverlay({
       side: activeSide,
       device_id: "browser-webcam",
       sensor_status: "offline",
-      camera_status: cameraStatus,
+      camera_status: analyzerValid ? cameraStatus : "warning",
       distance_cm: null,
       sensor_jitter_score: 0,
-      opencv_jitter_score: Number(motion.jitter.toFixed(3)),
+      opencv_jitter_score: Number((smootherEnabled ? smoothedFrame.jitter.cameraJitterScore : motion.jitter).toFixed(3)),
       combined_jitter_score: Number(combinedJitter.toFixed(3)),
-      jitter_detected: validAnalysis && combinedJitter > 0.65,
-      shoulder_angle: validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
-      elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
+      jitter_detected: analyzerValid && (combinedJitter > 0.45 || (smoothedFrame?.jitter?.peakJitterScore ?? 0) > 0.7),
+      shoulder_angle: analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null,
+      elbow_angle: analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null,
+      raw_shoulder_angle: validAnalysis ? Number(upperArmAngle.toFixed(1)) : null,
+      raw_elbow_angle: validAnalysis ? Number(elbowAngle.toFixed(1)) : null,
+      smoothed_shoulder_angle: analyzerValid && analyzerShoulderAngle != null ? Number(analyzerShoulderAngle.toFixed(1)) : null,
+      smoothed_elbow_angle: analyzerValid && analyzerElbowAngle != null ? Number(analyzerElbowAngle.toFixed(1)) : null,
+      smoothing_jitter_score: smootherEnabled ? smoothedFrame.jitter.cameraJitterScore : null,
+      angle_residual: smootherEnabled ? smoothedFrame.jitter.angleResidual : null,
+      velocity_residual_deg_per_sec: smootherEnabled ? smoothedFrame.jitter.velocityResidualDegPerSec : null,
+      trend_direction: smootherEnabled ? smoothedFrame.trend.elbowDirection : null,
+      trend_velocity_deg_per_sec: smootherEnabled ? smoothedFrame.trend.elbowVelocityDegPerSec : null,
+      validity_status: smootherEnabled ? smoothedFrame.validity.confidenceLabel : (validAnalysis ? "good" : "invalid"),
+      raw_validity_status: smootherEnabled ? smoothedFrame.validity.reason : angleRejectionReason,
+      stable_tracking: smootherEnabled ? smoothedFrame.stableFlags.isTrackingStable : validAnalysis,
+      stable_straight: smootherEnabled ? smoothedFrame.stableFlags.isStraightStable : false,
+      stable_flexed: smootherEnabled ? smoothedFrame.stableFlags.isFlexedStable : false,
       target_angle: targetAngle,
       landmark_confidence: Number(confidence.toFixed(3)),
       rep_count: analyzerOutput.rep_count,
-      rep_phase: validAnalysis ? repPhaseForAnalyzerPhase(analyzerOutput.phase) : "idle",
+      rep_phase: analyzerValid ? repPhaseForAnalyzerPhase(analyzerOutput.phase) : "idle",
       hold_time_sec: Number((analyzerOutput.hold_time_sec || 0).toFixed(1)),
       pace: analyzerOutput.pace,
       range_status: currentRange,
@@ -502,7 +544,7 @@ export default function BrowserPoseOverlay({
       elbow_present: elbowSample.present,
       wrist_present: wristSample.present,
       hip_present: hipSample.present,
-      angle_valid: validAnalysis,
+      angle_valid: analyzerValid,
       using_torso_reference: usingTorsoReference,
       using_screen_axis_fallback: usingScreenAxisFallback,
       shoulder_coords: compactPoint(shoulder, shoulderSample.score),
@@ -510,6 +552,7 @@ export default function BrowserPoseOverlay({
       wrist_coords: compactPoint(wrist, wristSample.score),
       angle_rejection_reason: angleRejectionReason,
       analyzer_output: analyzerOutput,
+      smoothed_frame: smoothedFrame,
       analyzer_phase_label: humanPhaseForAnalyzerPhase(analyzerOutput.phase),
       range_of_motion: analyzerOutput.range_of_motion,
       shoulder_drift: analyzerOutput.shoulder_drift,
@@ -590,7 +633,6 @@ export default function BrowserPoseOverlay({
 
   async function postLatestPacket(packet) {
     latestPacketRef.current = packet;
-    onPacketRef.current?.(packet);
     if (debugModeRef.current) {
       console.log("Physio analysis debug", {
         shoulder: packet._debug_landmarks?.shoulder || null,
@@ -617,6 +659,12 @@ export default function BrowserPoseOverlay({
     }
   }
 
+  function publishLatestPacket(packet, timestampMs) {
+    if (!packet || timestampMs - lastPublishedAtRef.current < DETECT_INTERVAL_MS) return;
+    lastPublishedAtRef.current = timestampMs;
+    onPacketRef.current?.(packet);
+  }
+
   function loop(timestampMs) {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -638,6 +686,7 @@ export default function BrowserPoseOverlay({
       latestPoseRef.current = poseResult.landmarks?.[0] || null;
       latestHandsRef.current = handResult.landmarks || [];
       latestPacketRef.current = buildPacket(latestPoseRef.current, latestHandsRef.current, timestampMs);
+      publishLatestPacket(latestPacketRef.current, timestampMs);
       lastDetectAtRef.current = timestampMs;
     }
 

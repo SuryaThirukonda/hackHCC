@@ -1,6 +1,101 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// Port 8010 is the clean backend that has all v2 routes (port 8000 has ghost WSL sockets)
+const FALLBACK_API_BASES = ["http://127.0.0.1:8010", "http://localhost:8010", "http://127.0.0.1:8765", "http://localhost:8765", "http://localhost:8001"];
+const successfulBaseByBucket = new Map();
 
-async function request(path, options = {}) {
+function pathBucket(path) {
+  if (path.startsWith("/api/analysis/v2")) return "/api/analysis/v2";
+  if (path.startsWith("/api/recordings/v2")) return "/api/recordings/v2";
+  if (path.startsWith("/api/presentation/v2")) return "/api/presentation/v2";
+  return "/api";
+}
+
+function candidateBases(path) {
+  const bucket = pathBucket(path);
+  const bases = [successfulBaseByBucket.get(bucket), API_BASE].filter(Boolean);
+  if (path.startsWith("/api/analysis/v2") || path.startsWith("/api/recordings/v2") || path.startsWith("/api/presentation/v2")) {
+    bases.push(...FALLBACK_API_BASES);
+  }
+  return Array.from(new Set(bases));
+}
+
+async function parseError(response, path, base, method) {
+  let detail = "";
+  try {
+    const payload = await response.json();
+    detail = Array.isArray(payload.detail)
+      ? payload.detail.map((item) => item.msg || JSON.stringify(item)).join("; ")
+      : payload.detail || payload.error || "";
+  } catch {
+    detail = "";
+  }
+  return new Error(detail || `${method || "GET"} ${base}${path} failed: ${response.status}`);
+}
+
+export async function request(path, options = {}) {
+  const method = options.method || "GET";
+  let lastError = null;
+  for (const base of candidateBases(path)) {
+    let response;
+    try {
+      response = await fetch(`${base}${path}`, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options
+      });
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (response.ok) {
+      successfulBaseByBucket.set(pathBucket(path), base);
+      return response.json();
+    }
+    lastError = await parseError(response, path, base, method);
+    if (response.status !== 404 || !path.startsWith("/api/")) break;
+  }
+  throw lastError || new Error(`${method} ${path} failed`);
+}
+
+export async function fetchApi(path, options = {}) {
+  return request(path, options);
+}
+
+export async function requestBinary(path, options = {}) {
+  const method = options.method || "GET";
+  let lastError = null;
+  for (const base of candidateBases(path)) {
+    let response;
+    try {
+      response = await fetch(`${base}${path}`, {
+        headers: { ...(options.headers || {}) },
+        ...options
+      });
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (response.ok) {
+      successfulBaseByBucket.set(pathBucket(path), base);
+      return response;
+    }
+    lastError = await parseError(response, path, base, method);
+    if (response.status !== 404 || !path.startsWith("/api/")) break;
+  }
+  throw lastError || new Error(`${method} ${path} failed`);
+}
+
+export function resolveApiUrl(urlOrPath, pathForBase = "/api") {
+  if (!urlOrPath) return urlOrPath;
+  try {
+    return new URL(urlOrPath).toString();
+  } catch {
+    const base = successfulBaseByBucket.get(pathBucket(pathForBase)) || API_BASE;
+    return new URL(urlOrPath, base).toString();
+  }
+}
+
+/*
+async function oldRequest(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options
@@ -17,6 +112,7 @@ async function request(path, options = {}) {
   }
   return response.json();
 }
+*/
 
 export function getHealth() {
   return request("/api/health");
@@ -70,6 +166,20 @@ export function generateGeminiSessionSummary(summary) {
   return request("/api/ai/session-summary", {
     method: "POST",
     body: JSON.stringify({ summary })
+  });
+}
+
+export function normalizeLocalSessionAnalysisV2(packet) {
+  return request("/api/analysis/v2/session-summary-local", {
+    method: "POST",
+    body: JSON.stringify(packet)
+  });
+}
+
+export function generateGeminiSessionAnalysisV2(packet) {
+  return request("/api/analysis/v2/gemini-session-analysis", {
+    method: "POST",
+    body: JSON.stringify(packet)
   });
 }
 

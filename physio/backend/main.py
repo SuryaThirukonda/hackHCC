@@ -15,10 +15,14 @@ from pydantic import ValidationError
 from coach.coach_orchestrator import CoachOrchestrator
 from coach.base import clean_coach_text
 from coach.gemini_coach import GeminiCoachProvider, sanitize_gemini_error
+from coach.gemini_session_analysis_v2 import GeminiSessionAnalysisV2Provider
 from coach.voice_provider import get_voice_provider
 from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
+from routes.presentation_v2 import router as presentation_v2_router
+from routes.session_recordings_v2 import router as session_recordings_v2_router
+from routes.session_analysis_v2 import router as session_analysis_v2_router
 from schemas import (
     CoachCueResponse,
     PhysioPacket,
@@ -27,6 +31,7 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
+from schemas_session_analysis_v2 import FinalSessionAnalysisPacketV2
 from storage_provider import get_session_store
 
 
@@ -43,6 +48,9 @@ app.add_middleware(
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
+app.include_router(session_analysis_v2_router)
+app.include_router(session_recordings_v2_router)
+app.include_router(presentation_v2_router)
 
 
 @dataclass
@@ -405,79 +413,60 @@ def ai_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
         str(summary.get("recommendation_text") or "Keep the same controlled pace next session."),
         "Keep the same controlled pace next session.",
     )
-    provider = GeminiCoachProvider()
-    if not provider.vertex_enabled:
-        return {
-            "ok": False,
-            "text": fallback,
-            "source": "local",
-            "status": "vertex_disabled",
-            "error": GeminiCoachProvider.debug_status().get("last_error"),
-        }
-
-    safe_summary = {
-        key: summary.get(key)
-        for key in (
-            "exercise",
-            "duration_sec",
-            "total_reps",
-            "clean_reps",
-            "rep_goal",
-            "best_range_of_motion",
-            "average_range_of_motion",
-            "average_physio_score",
-            "average_jitter_score",
-            "average_hold_time_sec",
-            "average_rep_duration_sec",
-            "common_issue",
-            "issue_label",
-            "pain_level",
-            "fatigue_level",
-            "recommendation_text",
-            "completed_reps",
-        )
-        if key in summary
-    }
-    prompt = (
-        "You are a physical therapy assistant reviewing OpenCV-tracked elbow flexion metrics. "
-        "Return JSON only with keys: summary_text, recommendation_text, health_report. "
-        "summary_text: 2 calm sentences about session performance. "
-        "recommendation_text: one focus for the next session (under 24 words). "
-        "health_report: 2-3 calm, non-diagnostic observations about range, control, fatigue, and consistency. "
-        "Use only the structured metrics below. No diagnosis. "
-        f"Metrics: {json.dumps(safe_summary, sort_keys=True)}"
-    )
     try:
-        raw = provider._generate_text(prompt, max_output_tokens=320)
-        parsed = _extract_json_object(raw)
-        recommendation = clean_coach_text(
-            str(parsed.get("recommendation_text", fallback)),
-            fallback,
+        packet = FinalSessionAnalysisPacketV2(
+            exercise_id=str(summary.get("exercise") or "elbow_flexion_extension"),
+            exercise_name=str(summary.get("exercise_name") or "Elbow Flexion / Extension"),
+            session={
+                "session_id": str(summary.get("session_id") or "legacy-summary"),
+                "duration_sec": int(summary.get("duration_sec") or 0),
+            },
+            goals={"rep_goal": int(summary.get("rep_goal") or 0)},
+            aggregate_metrics={
+                "total_reps": int(summary.get("total_reps") or 0),
+                "clean_reps": int(summary.get("clean_reps") or 0),
+                "average_physio_score": summary.get("average_physio_score"),
+                "best_range_of_motion": summary.get("best_range_of_motion") or summary.get("best_angle"),
+                "average_range_of_motion": summary.get("average_range_of_motion") or summary.get("average_angle"),
+                "average_hold_time_sec": summary.get("average_hold_time_sec"),
+                "average_jitter_score": summary.get("average_jitter_score"),
+            },
+            tracking_quality={
+                "data_quality": "medium",
+                "total_frames": 0,
+                "valid_frames": 0,
+                "invalid_frames": 0,
+                "valid_frame_ratio": 0,
+                "average_jitter_score": summary.get("average_jitter_score"),
+            },
+            issue_summary={
+                "common_issue": str(summary.get("common_issue") or "none"),
+                "issue_label": str(summary.get("issue_label") or "none"),
+                "warnings": [],
+            },
+            rep_breakdown=[],
+            local_summary={
+                "summary_text": str(summary.get("summary_text") or ""),
+                "recommendation_text": fallback,
+            },
         )
-        health_report = clean_coach_text(
-            str(parsed.get("health_report", "")),
-            "",
-        )
-        if len(health_report.split()) < 6:
-            health_report = clean_coach_text(
-                str(parsed.get("summary_text", recommendation)),
-                recommendation,
-            )
+        result = GeminiSessionAnalysisV2Provider().analyze(packet)
         return {
-            "ok": True,
-            "text": recommendation,
-            "health_report": health_report,
-            "source": "gemini",
-            "status": "ready",
+            "ok": result.ok,
+            "text": clean_coach_text(result.analysis.focus_next_time, fallback),
+            "health_report": clean_coach_text(result.analysis.written_summary, fallback),
+            "source": result.provider,
+            "status": "ready" if result.ok and not result.fallback_used else "fallback",
+            "error": result.error_message_sanitized,
         }
-    except Exception as exc:
+    except Exception:
         return {
             "ok": False,
             "text": fallback,
             "health_report": "",
             "source": "local",
             "status": "gemini_error",
-            "error": _short_error(exc),
+            "error": "legacy_session_summary_failed",
         }
 
 

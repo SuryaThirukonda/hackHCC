@@ -80,6 +80,20 @@ class PhysioPacket(BaseModel):
     jitter_detected: bool
     shoulder_angle: float | None
     elbow_angle: float | None
+    raw_shoulder_angle: float | None = None
+    raw_elbow_angle: float | None = None
+    smoothed_shoulder_angle: float | None = None
+    smoothed_elbow_angle: float | None = None
+    smoothing_jitter_score: float | None = Field(default=None, ge=0, le=1)
+    angle_residual: float | None = None
+    velocity_residual_deg_per_sec: float | None = None
+    trend_direction: str | None = None
+    trend_velocity_deg_per_sec: float | None = None
+    validity_status: str | None = None
+    raw_validity_status: str | None = None
+    stable_tracking: bool | None = None
+    stable_straight: bool | None = None
+    stable_flexed: bool | None = None
     target_angle: float
     landmark_confidence: float = Field(ge=0, le=1)
     rep_count: int = Field(ge=0)
