@@ -17,6 +17,7 @@ export default function SessionSummaryStep({
   onVoiceStatusChange,
   onNext,
   voiceFinished,
+  showFlowActions = true,
 }) {
   const analysis = geminiResult?.analysis;
   const spoken = analysis?.spoken_summary || "";
@@ -70,7 +71,12 @@ export default function SessionSummaryStep({
             )}
 
             {!analysis && !loading && (
-              <p className="muted-sub">{summary?.recommendation_text || "Summary will appear after analysis."}</p>
+              <>
+                {(geminiStatus === "error" || geminiStatus === "fallback") && (
+                  <p className="muted-sub">Gemini unavailable — showing local session analysis.</p>
+                )}
+                <p className="muted-sub">{summary?.recommendation_text || "Summary will appear after analysis."}</p>
+              </>
             )}
 
             {geminiError && <p className="coach-error">{geminiError}</p>}
@@ -91,6 +97,7 @@ export default function SessionSummaryStep({
         </div>
       </div>
 
+      {showFlowActions && (
       <div className="results-flow-actions">
         <button
           type="button"
@@ -105,6 +112,7 @@ export default function SessionSummaryStep({
           <span className="muted-sub">You can continue while the summary plays.</span>
         )}
       </div>
+      )}
     </section>
   );
 }

@@ -8,6 +8,7 @@ import {
   Dumbbell,
   FileText,
   FlaskConical,
+  History,
   Pause,
   Play,
   Power,
@@ -47,7 +48,7 @@ import LiveSession from "./components/LiveSession.jsx";
 import ProgressDashboard from "./components/ProgressDashboard.jsx";
 import SessionSummary from "./components/SessionSummary.jsx";
 import ResultsFlowStepper from "./components/results/ResultsFlowStepper.jsx";
-import SessionReplayOverlay from "./components/results/SessionReplayOverlay.jsx";
+import HistoryPage from "./components/history/HistoryPage.jsx";
 import VoiceLabDebugPanel from "./components/debug/VoiceLabDebugPanel.jsx";
 import { defaultExercise, exercises } from "./exercises/index.js";
 import { useSessionRecorder } from "./recording/useSessionRecorder.js";
@@ -64,6 +65,7 @@ const navItems = [
   { id: "exercises", label: "Exercises", icon: Dumbbell },
   { id: "live", label: "Live Session", icon: Camera },
   { id: "results", label: "Results", icon: FileText },
+  { id: "history", label: "History", icon: History },
   { id: "progress", label: "Progress", icon: BarChart3 },
   { id: "debug", label: "Debug", icon: FlaskConical }
 ];
@@ -185,7 +187,7 @@ export default function App() {
 
   // Reload session data from DB whenever user switches to the results tab
   useEffect(() => {
-    if (activeTab === "results") refreshSessions();
+    if (activeTab === "history") refreshSessions();
     if (activeTab !== "results") {
       setResultsVoiceStatus("idle");
       setCheckInSpeechStatus({ listening: false, transcribing: false });
@@ -749,6 +751,7 @@ export default function App() {
     exercises: showExerciseDetail ? selectedExercise.name : "Choose an exercise",
     live: selectedExercise.name,
     results: "Session results",
+    history: "Session history",
     progress: "Progress",
     debug: "Developer debug"
   }[activeTab];
@@ -759,6 +762,7 @@ export default function App() {
       : "A guided rehab flow focused on one reliable local movement demo.",
     live: "Live Webcam Analysis tracks your shoulder, elbow, and wrist landmarks in this browser.",
     results: "Review your current session, check in with your coach, then view session notes.",
+    history: "Browse saved sessions from the database — replay graph and analysis for your most recent workout.",
     progress: "Compare past sessions and track how your movement has changed.",
     debug: "Raw packet, source, and backend controls moved out of the patient flow."
   }[activeTab];
@@ -908,6 +912,23 @@ export default function App() {
           />
         )}
 
+        {activeTab === "history" && (
+          <HistoryPage
+            summary={summary}
+            selectedExercise={selectedExercise}
+            sessionResults={sessionResults}
+            sessions={sessions}
+            presentationCaches={presentationCaches}
+            geminiSessionAnalysis={geminiSessionAnalysis}
+            geminiSessionStatus={geminiSessionStatus}
+            geminiSessionError={geminiSessionError}
+            geminiAnalysisCache={geminiAnalysisCache}
+            sessionRecording={sessionRecording}
+            finalAnalysisPacket={finalAnalysisPacket}
+            onRefresh={refreshSessions}
+          />
+        )}
+
         {activeTab === "progress" && (
           <ProgressDashboard
             sessions={sessionResults.length ? sessionResults : sessions}
@@ -1004,60 +1025,6 @@ function saveGeminiSessionAnalysisCache({ sessionId, packet, result, status, err
     // Cache is only for demo visibility; the UI should keep working without localStorage.
   }
   return entry;
-}
-
-function resolveFeaturedPresentation({
-  featuredSession,
-  summary,
-  presentationCaches,
-  geminiSessionAnalysis,
-  geminiSessionStatus,
-  geminiSessionError,
-  geminiAnalysisCache,
-  sessionRecording,
-  finalAnalysisPacket
-}) {
-  if (!featuredSession) return null;
-
-  const isLive = summary?.session_id === featuredSession.session_id;
-  const cache = presentationCaches?.[featuredSession.session_id];
-
-  if (isLive) {
-    return {
-      sessionId: featuredSession.session_id,
-      summary: featuredSession,
-      geminiResult: geminiSessionAnalysis,
-      geminiStatus: geminiSessionStatus,
-      geminiError: geminiSessionError,
-      geminiCache: geminiAnalysisCache?.session_id === featuredSession.session_id ? geminiAnalysisCache : null,
-      recording: sessionRecording || cache?.replay_graph || cache?.recording || null,
-      finalAnalysisPacket
-    };
-  }
-
-  if (!cache) {
-    return {
-      sessionId: featuredSession.session_id,
-      summary: featuredSession,
-      geminiResult: null,
-      geminiStatus: "idle",
-      geminiError: "",
-      geminiCache: null,
-      recording: null,
-      finalAnalysisPacket: null
-    };
-  }
-
-  return {
-    sessionId: featuredSession.session_id,
-    summary: cache.summary || featuredSession,
-    geminiResult: cache.gemini_result || null,
-    geminiStatus: cache.gemini_status || (cache.gemini_result ? "ready" : "idle"),
-    geminiError: cache.gemini_error || "",
-    geminiCache: cache.gemini_cache || null,
-    recording: cache.replay_graph || cache.recording || null,
-    finalAnalysisPacket: cache.final_analysis_packet || null
-  };
 }
 
 function ExercisesPage({ exercises: exerciseList, onStart, onLoadSampleSession }) {
@@ -1330,204 +1297,6 @@ function ResultsPage({
       )}
     </div>
   );
-}
-
-function resolveSessionRecording(session, presentationCaches) {
-  const cache = presentationCaches?.[session?.session_id];
-  if (!cache) return null;
-  return cache.replay_graph || cache.recording || null;
-}
-
-function historyReplayReps(session, recording) {
-  if (recording?.reps?.length) return recording.reps;
-  if (!Array.isArray(session?.completed_reps)) return [];
-  return session.completed_reps.map((rep) => ({
-    rep_number: rep.rep_index,
-    rep_index: rep.rep_index,
-    physio_score: rep.physio_score,
-    jitter_score: rep.jitter_score,
-    issue: rep.issue,
-    issue_label: rep.issue,
-    clean: rep.clean ?? rep.issue === "none"
-  }));
-}
-
-function HistoryCard({ session, presentationCaches, expanded, onToggle }) {
-  const date = session.ended_at_ms
-    ? new Date(session.ended_at_ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
-    : "—";
-  const time = session.ended_at_ms
-    ? new Date(session.ended_at_ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : "";
-
-  const bestRom = session.best_range_of_motion ?? session.best_angle;
-  const avgRom = session.average_range_of_motion ?? session.average_angle;
-  const isForwardPressSession = session.exercise === "seated_one_arm_forward_press";
-  const bestPushDepth = session.best_push_depth_cm;
-  const recording = resolveSessionRecording(session, presentationCaches);
-  const replayReps = historyReplayReps(session, recording);
-
-  return (
-    <div className={`history-card${expanded ? " history-card--open" : ""}`}>
-      <button type="button" className="history-card-row" onClick={onToggle}>
-        <div className="history-card-date">
-          <span className="history-date-main">{date}</span>
-          <span className="history-date-time">{time}</span>
-        </div>
-        <div className="history-card-exercise">{exerciseLabelShort(session.exercise)}</div>
-        <div className="history-card-stat">
-          <span className="hstat-value">{session.total_reps ?? "—"}</span>
-          <span className="hstat-label">reps</span>
-        </div>
-        <div className="history-card-stat">
-          <span className="hstat-value">
-            {isForwardPressSession && Number.isFinite(bestPushDepth)
-              ? bestPushDepth.toFixed(0)
-              : Number.isFinite(bestRom) ? bestRom.toFixed(0) : "—"}
-          </span>
-          <span className="hstat-label">{isForwardPressSession ? "best cm" : "best ROM°"}</span>
-        </div>
-        <div className="history-card-stat">
-          <span className="hstat-value">{session.average_physio_score ?? "—"}</span>
-          <span className="hstat-label">score</span>
-        </div>
-        <div className="history-card-stat">
-          <span className="hstat-value">{session.duration_sec ?? "—"}</span>
-          <span className="hstat-label">sec</span>
-        </div>
-        <span className="history-chevron">{expanded ? "▲" : "▼"}</span>
-      </button>
-
-      {expanded && (
-        <div className="history-card-detail">
-          {/* recommendation blurb */}
-          {session.recommendation_text && (
-            <p className="hdetail-blurb">{session.recommendation_text}</p>
-          )}
-
-          <div className="hdetail-replay">
-            <SessionReplayOverlay samples={recording?.samples || []} reps={replayReps} />
-          </div>
-
-          {/* wide stat grid */}
-          <div className="hdetail-stat-grid">
-            <div className="hdetail-stat">
-              <span className="hds-label">Exercise</span>
-              <span className="hds-value">{exerciseLabelShort(session.exercise)}</span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Duration</span>
-              <span className="hds-value">{session.duration_sec ?? "—"}<small> s</small></span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Total reps</span>
-              <span className="hds-value">{session.total_reps ?? "—"}</span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Clean reps</span>
-              <span className="hds-value">{session.clean_reps ?? "—"}</span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">{isForwardPressSession ? "Best press" : "Best ROM"}</span>
-              <span className="hds-value">
-                {isForwardPressSession && Number.isFinite(bestPushDepth)
-                  ? bestPushDepth.toFixed(1)
-                  : Number.isFinite(bestRom) ? bestRom.toFixed(1) : "—"}
-                <small>{isForwardPressSession ? " cm" : "°"}</small>
-              </span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">{isForwardPressSession ? "Avg press" : "Avg ROM"}</span>
-              <span className="hds-value">
-                {isForwardPressSession && Number.isFinite(session.average_push_depth_cm)
-                  ? session.average_push_depth_cm.toFixed(1)
-                  : Number.isFinite(avgRom) ? avgRom.toFixed(1) : "—"}
-                <small>{isForwardPressSession ? " cm" : "°"}</small>
-              </span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Avg hold</span>
-              <span className="hds-value">{Number.isFinite(session.average_hold_time_sec) ? session.average_hold_time_sec.toFixed(1) : "—"}<small> s</small></span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Score</span>
-              <span className="hds-value">{session.average_physio_score ?? "—"}</span>
-            </div>
-            <div className="hdetail-stat">
-              <span className="hds-label">Avg jitter</span>
-              <span className="hds-value">{Number.isFinite(session.average_jitter_score) ? session.average_jitter_score.toFixed(2) : "—"}</span>
-            </div>
-          </div>
-
-          {/* rep-by-rep table */}
-          {Array.isArray(session.completed_reps) && session.completed_reps.length > 0 && (
-            <div className="hdetail-reps">
-              <p className="eyebrow hdetail-reps-heading">Rep-by-rep breakdown</p>
-              <div className="hdetail-rep-table">
-                <span className="hdr-head">Rep</span>
-                <span className="hdr-head">{isForwardPressSession ? "Press cm" : "ROM°"}</span>
-                <span className="hdr-head">Hold</span>
-                <span className="hdr-head">Duration</span>
-                <span className="hdr-head">Score</span>
-                <span className="hdr-head">Pace</span>
-                <span className="hdr-head">Issue</span>
-                {session.completed_reps.map((rep) => (
-                  <React.Fragment key={rep.rep_index}>
-                    <span className="hdr-num">#{rep.rep_index}</span>
-                    <span>
-                      {isForwardPressSession && Number.isFinite(rep.push_depth_cm)
-                        ? rep.push_depth_cm.toFixed(1)
-                        : Number.isFinite(rep.range_of_motion) ? rep.range_of_motion.toFixed(0) : "—"}
-                    </span>
-                    <span>{Number.isFinite(rep.hold_time_sec) ? `${rep.hold_time_sec.toFixed(1)}s` : "—"}</span>
-                    <span>{Number.isFinite(rep.rep_duration_sec) ? `${rep.rep_duration_sec.toFixed(1)}s` : "—"}</span>
-                    <span className={rep.physio_score >= 70 ? "hdr-good" : rep.physio_score >= 50 ? "hdr-ok" : "hdr-bad"}>{rep.physio_score ?? "—"}</span>
-                    <span>{rep.pace || "—"}</span>
-                    <span className={rep.issue === "none" ? "hdr-clean" : "hdr-issue"}>{issueShort(rep.issue)}</span>
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function issueShort(issue) {
-  return {
-    did_not_bend_enough: "bend deeper",
-    short_push_depth: "short press",
-    did_not_hold_long_enough: "hold longer",
-    moved_too_fast: "too fast",
-    too_jittery: "jittery",
-    shoulder_compensation: "arm drift",
-    low_confidence: "tracking",
-    none: "clean",
-  }[issue] ?? issue ?? "—";
-}
-
-function RefreshIcon({ spinning }) {
-  return (
-    <svg
-      width="14" height="14" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-      style={{ flexShrink: 0, animation: spinning ? "spin 0.8s linear infinite" : "none" }}
-    >
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M8 16H3v5" />
-    </svg>
-  );
-}
-
-function exerciseLabelShort(id) {
-  return {
-    elbow_flexion_extension: "Elbow Flexion",
-    seated_one_arm_forward_press: "Forward Press"
-  }[id] || id || "—";
 }
 
 function DebugPage({

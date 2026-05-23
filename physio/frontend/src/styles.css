@@ -3703,6 +3703,14 @@ button:disabled {
 
 /* ── Session history list ──────────────────────────────────── */
 
+.history-featured {
+  margin-bottom: 40px;
+}
+
+.history-featured .session-summary-step {
+  margin-top: 12px;
+}
+
 .session-history {
   margin-top: 52px;
 }
