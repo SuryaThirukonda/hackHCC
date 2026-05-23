@@ -77,3 +77,7 @@ export async function requestHeyGenCoach(spokenSummary, audioUrl, sessionId) {
     })
   });
 }
+
+export async function getHeyGenVideoStatus(videoId) {
+  return request(`/api/presentation/v2/heygen-video-status/${encodeURIComponent(videoId)}`);
+}

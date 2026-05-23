@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from coach.avatar_provider import get_avatar_provider
+from coach.avatar_provider import HeyGenAvatarProvider, get_avatar_provider
 from coach.base import clean_coach_text, clean_spoken_summary_text
 from coach.gemini_coach import GeminiCoachProvider
 from coach.voice_provider import get_voice_provider
@@ -54,7 +54,6 @@ def heygen_session_coach(payload: dict[str, Any]) -> dict[str, Any]:
     audio_url = str((payload or {}).get("audio_url") or "") or None
     embed_html = os.getenv("EMBED", "").strip()
 
-    # Always return the embed if available (immediate, no wait)
     embed_response = {
         "embed_available": bool(embed_html),
         "embed_html": embed_html or None,
@@ -72,14 +71,41 @@ def heygen_session_coach(payload: dict[str, Any]) -> dict[str, Any]:
     avatar = get_avatar_provider()
     result = avatar.speak(text, optional_audio_url=audio_url)
 
-    status = result.status
-    video_url = result.avatar_url
-
     return {
         "ok": True,
-        "status": status,
-        "video_url": video_url,
+        "status": result.status,
+        "video_url": result.avatar_url,
         "avatar_session_id": result.avatar_session_id,
+        "generate_time_ms": result.generate_time_ms,
         "error_message_sanitized": result.error_message,
         **embed_response,
+    }
+
+
+@router.get("/heygen-video-status/{video_id}")
+def heygen_video_status(video_id: str) -> dict[str, Any]:
+    """
+    Poll HeyGen for the processing status of a previously queued video.
+    Frontend calls this every ~5s until status is 'completed' or 'failed'.
+    HeyGen statuses: pending | processing | completed | failed
+    """
+    avatar = get_avatar_provider()
+    if not isinstance(avatar, HeyGenAvatarProvider):
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "video_url": None,
+            "error": "HeyGen not configured (AVATAR_PROVIDER != heygen)",
+        }
+
+    poll = avatar.poll_video_status(video_id)
+    heygen_status = poll.get("status", "unknown")
+    return {
+        "ok": True,
+        "status": heygen_status,
+        "video_url": poll.get("video_url"),
+        "thumbnail_url": poll.get("thumbnail_url"),
+        "duration": poll.get("duration"),
+        "poll_time_ms": poll.get("poll_time_ms"),
+        "error": poll.get("error"),
     }

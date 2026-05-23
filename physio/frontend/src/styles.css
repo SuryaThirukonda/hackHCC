@@ -2430,6 +2430,53 @@ path.diagram-forearm {
   font-size: 2rem;
 }
 
+/* HeyGen coach section in session results */
+.heygen-coach-section {
+  margin-top: 24px;
+}
+
+.heygen-coach-panel--video {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.heygen-video-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.heygen-timing-badge {
+  font-size: 0.68rem;
+  color: var(--mint, #4ecca3);
+  background: color-mix(in srgb, var(--mint, #4ecca3) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mint, #4ecca3) 30%, transparent);
+  border-radius: 20px;
+  padding: 2px 8px;
+  letter-spacing: 0.04em;
+}
+
+.heygen-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 4px;
+  text-align: center;
+}
+
+.heygen-elapsed {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.heygen-loading-note {
+  font-size: 0.7rem;
+  opacity: 0.65;
+}
+
 .loading-hint,
 .player-header,
 .player-controls,
