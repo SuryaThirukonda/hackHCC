@@ -34,12 +34,17 @@ import {
 } from "./ai/coachVoiceScript.js";
 import { generateSessionSummary as generateAISessionSummary } from "./ai/geminiCoachClient.js";
 import { speakCoachCue } from "./ai/elevenLabsClient.js";
+import { buildFinalSessionAnalysisPacket } from "./analysis/session/buildFinalSessionAnalysisPacket.js";
+import { callGeminiSessionAnalysisV2 } from "./analysis/gemini/geminiSessionAnalysisClient.js";
+import { useSessionRecorder } from "./recording/useSessionRecorder.js";
+import { getPresentationStatus } from "./api/sessionRecordingV2Client.js";
 import CoachPanel from "./components/CoachPanel.jsx";
 import CountdownOverlay from "./components/CountdownOverlay.jsx";
 import ExercisePreview from "./components/ExercisePreview.jsx";
 import LiveSession from "./components/LiveSession.jsx";
 import ProgressDashboard from "./components/ProgressDashboard.jsx";
 import SessionSummary from "./components/SessionSummary.jsx";
+import ResultsPresentationPanel from "./components/results/ResultsPresentationPanel.jsx";
 import { defaultExercise, exercises } from "./exercises/index.js";
 import {
   RUNNER_EVENTS,
@@ -117,9 +122,19 @@ export default function App() {
   const [voiceStatus, setVoiceStatus] = useState("idle");
   const [voiceError, setVoiceError] = useState("");
   const [bonusRepRequested, setBonusRepRequested] = useState(false);
+  const [geminiV2Result, setGeminiV2Result] = useState(null);
+  const [geminiV2Status, setGeminiV2Status] = useState("idle");
+  const [presentationStatus, setPresentationStatus] = useState(null);
+  const [sessionRecording, setSessionRecording] = useState(null);
   const voiceThrottleRef = useRef({ lastSpeakAt: 0, lastText: "", lastPhase: "" });
   const audioRef = useRef(null);
   const pendingAudioRef = useRef(null); // queued URL to play once current clip ends
+
+  const recorder = useSessionRecorder({
+    sessionId,
+    exerciseId: selectedExercise?.id,
+    active: isRecordingState(runner.status),
+  });
 
   useEffect(() => {
     getHealth()
@@ -132,6 +147,9 @@ export default function App() {
     getCoachProviderStatus()
       .then((status) => setProviderStatus(status))
       .catch((err) => setProviderStatus({ error: err.message }));
+    getPresentationStatus()
+      .then((status) => setPresentationStatus(status))
+      .catch(() => {});
   }, []);
 
   // Reload session data from DB whenever user switches to the results tab
@@ -225,6 +243,7 @@ export default function App() {
         analyzerOutput: nextPacket.analyzer_output || null,
         completedRep: nextPacket.completed_rep || null
       });
+      recorder.recordPacket(nextPacket, nextPacket.smoothed_frame || null);
     }
     setCue({
       message: nextPacket.local_coach_message,
@@ -365,6 +384,9 @@ export default function App() {
     setCue(null);
     setError("");
     setBonusRepRequested(false);
+    setGeminiV2Result(null);
+    setGeminiV2Status("idle");
+    setSessionRecording(null);
     setLive(true);
     setActiveTab("live");
     dispatchRunner({
@@ -410,24 +432,34 @@ export default function App() {
     dispatchRunner({ type: RUNNER_EVENTS.END_SESSION });
     setAiSummaryText(localSummary.recommendation_text);
     setAiHealthReport("");
-    const healthPacket = {
-      ...localSummary,
-      ...buildSessionHealthPacket(localSummary)
-    };
-    generateAISessionSummary(healthPacket)
+    setGeminiV2Result(null);
+    setGeminiV2Status("loading");
+
+    // Build structured packet and call V2 post-session Gemini (never called during live exercise)
+    const finalPacket = buildFinalSessionAnalysisPacket(localSummary, runner, selectedExercise);
+    callGeminiSessionAnalysisV2(finalPacket)
       .then((result) => {
-        const summaryText = result.text || localSummary.recommendation_text;
-        setAiSummaryText(summaryText);
-        setAiHealthReport(result.health_report || "");
-        if (summaryText) {
-          speakCoachCue(summaryText).catch(() => {});
+        setGeminiV2Result(result);
+        setGeminiV2Status(result.fallback_used ? "fallback" : "ready");
+        const analysis = result.analysis;
+        if (analysis) {
+          setAiSummaryText(analysis.written_summary || analysis.spoken_summary || localSummary.recommendation_text);
+          setAiHealthReport(analysis.what_went_well || "");
+          if (analysis.spoken_summary) {
+            speakCoachCue(analysis.spoken_summary).catch(() => {});
+          }
         }
       })
       .catch((err) => {
+        setGeminiV2Status("error");
         setAiSummaryText(localSummary.recommendation_text);
-        setAiHealthReport("");
         setAiCue((current) => ({ ...current, error: err.message }));
       });
+
+    // Save session recording (non-blocking — failure must not block results)
+    recorder.stopAndSave()
+      .then((recording) => { if (recording) setSessionRecording(recording); })
+      .catch(() => {});
     try {
       await endSession({
         session_id: activeSession,
@@ -583,6 +615,11 @@ export default function App() {
             sessionResults={sessionResults}
             sessions={sessions}
             onRefresh={refreshSessions}
+            geminiV2Result={geminiV2Result}
+            geminiV2Status={geminiV2Status}
+            sessionRecording={sessionRecording}
+            presentationStatus={presentationStatus}
+            sessionId={sessionLabel}
           />
         )}
 
@@ -811,7 +848,7 @@ function RepTimingPanel({ reps = [] }) {
   );
 }
 
-function ResultsPage({ summary, selectedExercise, aiSummaryText, aiHealthReport, sessionResults, sessions, onRefresh }) {
+function ResultsPage({ summary, selectedExercise, aiSummaryText, aiHealthReport, sessionResults, sessions, onRefresh, geminiV2Result, geminiV2Status, sessionRecording, presentationStatus, sessionId }) {
   const [expandedId, setExpandedId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -825,6 +862,7 @@ function ResultsPage({ summary, selectedExercise, aiSummaryText, aiHealthReport,
 
   const featuredSession = allResults[0] || null;
   const historyRows = allResults.slice(1);
+  const embedHtml = presentationStatus?.liveavatar_embed_html || null;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -859,6 +897,17 @@ function ResultsPage({ summary, selectedExercise, aiSummaryText, aiHealthReport,
         </section>
       ) : (
         <>
+          {featuredSession.session_id === summary?.session_id && (
+            <ResultsPresentationPanel
+              geminiResult={geminiV2Result}
+              geminiStatus={geminiV2Status}
+              sessionId={sessionId}
+              summary={featuredSession}
+              recording={sessionRecording}
+              embedHtml={embedHtml}
+            />
+          )}
+
           <SessionSummary
             summary={featuredSession}
             aiSummaryText={featuredSession.session_id === summary?.session_id ? aiSummaryText : ""}

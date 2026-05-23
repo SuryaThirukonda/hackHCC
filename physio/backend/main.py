@@ -19,6 +19,9 @@ from coach.voice_provider import get_voice_provider
 from env_loader import configured_secret, load_env_file, public_base_url
 from mock_packet_generator import MockPacketGenerator
 from packet_merge import apply_local_rules
+from routes.session_analysis_v2 import router as analysis_v2_router
+from routes.session_recordings_v2 import router as recordings_v2_router
+from routes.presentation_v2 import router as presentation_v2_router
 from schemas import (
     CoachCueResponse,
     PhysioPacket,
@@ -32,6 +35,9 @@ from storage_provider import get_session_store
 
 load_env_file()
 app = FastAPI(title="Physio Backend", version="0.1.0")
+app.include_router(analysis_v2_router)
+app.include_router(recordings_v2_router)
+app.include_router(presentation_v2_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

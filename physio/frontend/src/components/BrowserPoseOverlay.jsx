@@ -2,6 +2,8 @@ import { Camera, Loader2, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createElbowFlexionAnalyzer } from "../analyzers/elbowFlexionAnalyzer.js";
 import { postPacket } from "../api/client.js";
+// raw MediaPipe angles are smoothed before analyzer state transitions
+import { createPoseSignalSmoother } from "../analysis/smoothing/poseSignalSmoother.js";
 
 const TARGET_ANGLE = 90;
 const DETECT_INTERVAL_MS = 66;
@@ -237,6 +239,7 @@ export default function BrowserPoseOverlay({
   const latestHandsRef = useRef([]);
   const debugModeRef = useRef(false);
   const analyzerRef = useRef(createElbowFlexionAnalyzer(exercise));
+  const smootherRef = useRef(createPoseSignalSmoother());
   const previousSessionRef = useRef(sessionId);
   const previousRecordingRef = useRef(recordingActive);
   const [cameraState, setCameraState] = useState("idle");
@@ -274,12 +277,14 @@ export default function BrowserPoseOverlay({
   }, [debugMode]);
   useEffect(() => {
     analyzerRef.current = createElbowFlexionAnalyzer(exercise);
+    smootherRef.current.reset();
     previousSessionRef.current = sessionId;
   }, [exercise?.id]);
   useEffect(() => {
     if (previousSessionRef.current !== sessionId) {
       if (!recordingActive) {
         analyzerRef.current.reset();
+        smootherRef.current.reset();
         samplesRef.current = [];
       }
       previousSessionRef.current = sessionId;
@@ -288,6 +293,7 @@ export default function BrowserPoseOverlay({
   useEffect(() => {
     if (!previousRecordingRef.current && recordingActive) {
       analyzerRef.current.reset();
+      smootherRef.current.reset();
       samplesRef.current = [];
     }
     previousRecordingRef.current = recordingActive;
@@ -454,13 +460,29 @@ export default function BrowserPoseOverlay({
           ? "almost_there"
           : "overextended"
       : "unknown";
-    const analyzerFrame = {
+    // Run raw angles through the smoother before passing to the analyzer.
+    // The analyzer uses smoothed values; both raw and smoothed are kept in the packet.
+    const smoothedFrame = smootherRef.current.process({
       timestampMs: Math.round(timestampMs),
       elbowAngle: validAnalysis ? elbowAngle : null,
       shoulderAngle: validAnalysis ? upperArmAngle : null,
       landmarkConfidence: confidence,
-      jitterScore: combinedJitter,
       validLandmarks: validAnalysis
+    });
+    const analyzerElbow = smoothedFrame.validity.valid
+      ? smoothedFrame.smoothed.elbowAngle
+      : null;
+    const analyzerShoulder = smoothedFrame.validity.valid
+      ? smoothedFrame.smoothed.shoulderAngle
+      : null;
+
+    const analyzerFrame = {
+      timestampMs: Math.round(timestampMs),
+      elbowAngle: analyzerElbow,
+      shoulderAngle: analyzerShoulder,
+      landmarkConfidence: confidence,
+      jitterScore: smoothedFrame.jitter.cameraJitterScore || combinedJitter,
+      validLandmarks: smoothedFrame.validity.valid
     };
     const analyzerOutput = recordingActive
       ? analyzerRef.current.analyze(analyzerFrame)
@@ -514,6 +536,7 @@ export default function BrowserPoseOverlay({
       range_of_motion: analyzerOutput.range_of_motion,
       shoulder_drift: analyzerOutput.shoulder_drift,
       completed_rep: analyzerOutput.completed_rep,
+      smoothed_frame: smoothedFrame,
       _debug_landmarks: {
         shoulder: compactPoint(shoulder, shoulderSample.score),
         elbow: compactPoint(elbow, elbowSample.score),
