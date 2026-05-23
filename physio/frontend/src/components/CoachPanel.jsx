@@ -9,13 +9,9 @@ function mediaUrl(path) {
 }
 
 export default function CoachPanel({ packet, cue }) {
-<<<<<<< HEAD
-  const message = cue?.message || packet?.local_coach_message || "Start a mock session to receive coaching.";
+  const message = cue?.message || packet?.local_coach_message || "Begin a live session to receive movement cues.";
   const audioSrc = mediaUrl(cue?.audio_url);
   const avatarSrc = mediaUrl(cue?.avatar_url);
-=======
-  const message = cue?.message || packet?.local_coach_message || "Begin a live session to receive movement cues.";
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
   return (
     <section className="coach-panel">
@@ -34,7 +30,7 @@ export default function CoachPanel({ packet, cue }) {
         <p className="eyebrow">Coach cue</p>
         <h2>{message}</h2>
         <div className="coach-stats">
-          <span><Radio size={15} /> local cue</span>
+          <span><Radio size={15} /> {cue?.source || "local cue"}</span>
           <span><Volume2 size={15} /> {cue?.voice_status || packet?.voice_status || "idle"}</span>
           <span>{cue?.avatar_status || packet?.avatar_status || "idle"} avatar</span>
           <span>{cue?.should_speak ? "spoken" : cue?.reason || "visual"}</span>

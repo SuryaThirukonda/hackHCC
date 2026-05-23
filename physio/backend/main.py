@@ -23,11 +23,7 @@ from schemas import (
     SessionStartResponse,
     SessionSummary,
 )
-<<<<<<< HEAD
-from storage_provider import get_session_store
-=======
 from sqlite_store import SQLitePhysioStore
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
 
 load_env_file()
@@ -69,57 +65,13 @@ class SessionState:
 
 state = SessionState()
 mock_generator = MockPacketGenerator()
-<<<<<<< HEAD
 coach_orchestrator = CoachOrchestrator()
-store = get_session_store()
-websockets: set[WebSocket] = set()
-
-
-def waiting_for_real_packet() -> PhysioPacket:
-    return PhysioPacket(
-        session_id=state.session_id,
-        timestamp_ms=int(time.time() * 1000),
-        exercise=state.exercise,
-        side=state.side,
-        device_id="opencv-waiting",
-        sensor_status="offline",
-        camera_status="warning",
-        distance_cm=None,
-        sensor_jitter_score=0,
-        opencv_jitter_score=0,
-        combined_jitter_score=0,
-        jitter_detected=False,
-        shoulder_angle=0,
-        elbow_angle=0,
-        target_angle=state.target_angle,
-        landmark_confidence=0,
-        rep_count=0,
-        rep_phase="idle",
-        hold_time_sec=0,
-        pace="unknown",
-        range_status="unknown",
-        compensation="unknown",
-        physio_score=0,
-        coach_state="low_confidence",
-        local_coach_message="Waiting for OpenCV packets from pose_tracker.py.",
-        avatar_status="idle",
-        voice_status="idle",
-    )
-=======
 store = SQLitePhysioStore()
 websockets: set[WebSocket] = set()
 
 
-def get_coach_provider():
-    provider = os.getenv("COACH_PROVIDER", "mock").lower()
-    if provider == "gemini":
-        return GeminiCoachProvider()
-    return MockCoachProvider()
-
-
 SOURCE_RECENT_WINDOW_SEC = 2.5
 FRAME_RECENT_WINDOW_SEC = 3.0
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
 
 
 def source_age_ms(source: str) -> int:
@@ -231,9 +183,7 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
     state.latest_frame = None
     state.latest_frame_received_at = 0.0
     mock_generator.started = time.time()
-<<<<<<< HEAD
     coach_orchestrator.reset_session(session_id)
-=======
     store.save_session_start(
         session_id=session_id,
         user_id=state.user_id,
@@ -242,7 +192,6 @@ def start_session(request: SessionStartRequest) -> SessionStartResponse:
         target_angle=state.target_angle,
         started_at_ms=state.started_at_ms,
     )
->>>>>>> ebcb7039409e3b11bd5e7db95e98bfc47fec3b35
     return SessionStartResponse(session_id=session_id, status="started")
 
 

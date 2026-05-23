@@ -226,3 +226,7 @@ class SQLitePhysioStore:
             packets = connection.execute("SELECT COUNT(*) AS count FROM packets").fetchone()["count"]
             summaries = connection.execute("SELECT COUNT(*) AS count FROM session_summaries").fetchone()["count"]
         return {"sessions": sessions, "packets": packets, "summaries": summaries, "db_path": str(self.db_path)}
+
+
+# Backward compatibility for storage_provider.py from the Person C branch.
+SQLiteSessionStore = SQLitePhysioStore
