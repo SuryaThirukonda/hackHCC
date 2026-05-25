@@ -1,8 +1,6 @@
-# HackHCC Physio Workspace
+### HackHCC Physio Project
+# 2nd place winner overall
 
-The BC-0 skeleton app lives in `physio/`.
-
-Start here:
 
 ```powershell
 cd physio
